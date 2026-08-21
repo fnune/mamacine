@@ -1,0 +1,9 @@
+These font files are subsets (latin) of:
+
+- Fraunces (variable, opsz 9-144, wght 100-900)
+  Copyright 2020 The Fraunces Project Authors (https://github.com/undercasetype/Fraunces)
+- Atkinson Hyperlegible (regular and bold)
+  Copyright 2020 Braille Institute of America, Inc. (https://www.brailleinstitute.org/freefont)
+
+Both are licensed under the SIL Open Font License, Version 1.1, available with a FAQ at
+https://openfontlicense.org

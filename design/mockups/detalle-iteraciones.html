@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Detalle · iteraciones (estilo 1)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #f6f0e4;
+    --panel: #fffcf4;
+    --line: #e2d7c1;
+    --text: #33291c;
+    --dim: #77685a;
+    --accent: #8c2f39;
+    --accent-ink: #fff8ee;
+    --gold: #b98a2e;
+    --ok: #3e6f4e;
+    --radius: 14px;
+    --display: "Fraunces", serif;
+    --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #d9d2c2; font: 17px/1.55 var(--body); color: var(--text); padding: 36px 20px 80px; }
+
+  .spec { max-width: 960px; margin: 0 auto 8px; color: #4c443a; }
+  .spec h1 { font: 600 26px var(--display); margin: 0 0 6px; }
+  .spec p { margin: 0; font-size: 15px; }
+
+  .caption { max-width: 960px; margin: 34px auto 8px; font-size: 15px; color: #56504a; }
+  .caption b { color: #33291c; }
+  .window {
+    max-width: 960px; height: 600px; margin: 0 auto; background: var(--bg);
+    border-radius: 12px; overflow: hidden; box-shadow: 0 10px 34px rgba(51,41,28,.28);
+    display: flex; flex-direction: column;
+  }
+  .notes { max-width: 960px; margin: 10px auto 0; padding-left: 18px; color: #56504a; font-size: 14px; }
+  .notes li { margin: 3px 0; }
+  .good::marker { content: "＋ "; color: #2c7a4b; }
+  .bad::marker { content: "− "; color: #b03a2e; }
+
+  header {
+    display: flex; align-items: center; gap: 22px; padding: 14px 26px;
+    background: var(--panel); border-bottom: 2px solid var(--line); flex: none;
+  }
+  .brand { font: 700 25px/1 var(--display); color: var(--accent); }
+  .brand small { display: block; font: 400 11px var(--body); letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-top: 3px; }
+  header nav { display: flex; gap: 6px; }
+  header nav a { text-decoration: none; color: var(--dim); font-size: 17px; padding: 10px 18px; border-radius: 999px; }
+  header nav a.on { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .pill {
+    margin-left: auto; display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 6px 16px 6px 6px;
+    font-size: 15px; color: var(--dim);
+  }
+  .pill .thumb { width: 30px; height: 42px; border-radius: 5px; background: linear-gradient(160deg, #b0836b, #6e4a3a); }
+  .pill .mini { width: 70px; height: 7px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .pill .mini i { display: block; height: 100%; width: 62%; background: var(--accent); }
+  .gear { border: none; background: none; font-size: 21px; color: var(--dim); cursor: pointer; padding: 8px; }
+
+  main { flex: 1; min-height: 0; padding: 26px 32px; display: flex; flex-direction: column; }
+
+  .film-row { display: flex; gap: 30px; flex: 1; min-height: 0; }
+  .poster { width: 230px; flex: none; border-radius: var(--radius); align-self: start;
+            aspect-ratio: 2 / 3; display: flex; align-items: center; justify-content: center;
+            font: 600 64px var(--display); color: rgba(255,248,238,.85);
+            background: linear-gradient(160deg,#b0836b,#6e4a3a); }
+  .info { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  h1.title { font: 600 34px/1.15 var(--display); margin: 0 0 6px; }
+  .factline { color: var(--dim); margin: 0 0 14px; }
+  .factline .sep { color: var(--gold); }
+  .synopsis { margin: 0 0 6px; max-width: 58ch; }
+  .links { margin: 6px 0 0; }
+  a.ext { color: var(--accent); font-size: 15px; text-decoration: none; border-bottom: 1px solid var(--line); padding-bottom: 1px; }
+
+  .progress-card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 18px 22px; margin-top: auto;
+  }
+  .status { font-size: 20px; color: var(--accent); margin: 0 0 10px; font-weight: 700; }
+  .bar { height: 14px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 62%; background: linear-gradient(90deg, var(--accent), #a94550); }
+  .beneath { color: var(--dim); margin: 9px 0 0; font-size: 15px; display: flex; align-items: baseline; gap: 18px; }
+  .fold { color: var(--dim); font-size: 14px; margin-left: auto; cursor: pointer; }
+  .cancel { color: var(--dim); font-size: 14px; cursor: pointer; background: none; border: none; font-family: var(--body); padding: 0; }
+
+  /* variant B: full-width band below the film */
+  .band {
+    flex: none; border-top: 2px solid var(--line); background: var(--panel);
+    padding: 16px 32px 18px;
+  }
+  .band .status { margin-bottom: 8px; }
+
+  /* pre-download detail bits */
+  .room { color: var(--ok); margin: 18px 0 4px; }
+  .chosen { color: var(--dim); margin: 0; font-size: 16px; }
+  .actions { display: flex; gap: 14px; margin-top: 18px; align-items: center; }
+  button.primary {
+    font: 700 17px var(--body); background: var(--accent); color: var(--accent-ink);
+    border: none; border-radius: var(--radius); padding: 13px 28px; cursor: pointer;
+  }
+  button.quiet { font: 17px var(--body); background: none; border: none; color: var(--dim); cursor: pointer; padding: 12px 4px; }
+</style>
+</head>
+<body>
+
+<div class="spec">
+  <h1>Detalle y descarga · iteraciones sobre el estilo 1</h1>
+  <p>El problema: la columna derecha se queda a medias y el hueco entre el pliegue y las acciones es aire muerto. La idea común: la película llena la pantalla (sinopsis, datos, enlace a la ficha) y la maquinaria de la descarga ocupa un sitio propio y compacto.</p>
+</div>
+
+<!-- ============ A ============ -->
+<p class="caption"><b>A · la descarga como tarjeta, anclada abajo</b> · la ficha arriba, el progreso en una tarjeta que cierra la columna</p>
+<div class="window">
+  <header>
+    <div class="brand">Mamá Cine<small>sesión continua</small></div>
+    <nav><a href="#">Buscar</a><a href="#">Mis películas</a></nav>
+    <div class="pill"><div class="thumb"></div><span>Vacaciones en Roma</span><div class="mini"><i></i></div><span>62 %</span></div>
+    <button class="gear" title="Ajustes">⚙</button>
+  </header>
+  <main>
+    <div class="film-row">
+      <div class="poster">V</div>
+      <div class="info">
+        <h1 class="title">Vacaciones en Roma</h1>
+        <p class="factline">1953 <span class="sep">·</span> 1 h 58 min <span class="sep">·</span> comedia romántica</p>
+        <p class="synopsis">Una princesa de visita oficial en Roma se escapa una noche del palacio y conoce a un periodista americano. Él sabe quién es ella; ella no sabe que él lo sabe. Audrey Hepburn ganó el Óscar por esta película.</p>
+        <p class="links"><a class="ext" href="#">Ver la ficha en IMDb ↗</a></p>
+        <div class="progress-card">
+          <p class="status">Descargando 62 %</p>
+          <div class="bar"><i></i></div>
+          <p class="beneath">
+            <span>1,2 GB de 1,9 GB · 4,1 MB/s</span>
+            <span class="fold">Qué ha pasado ▾</span>
+            <button class="cancel">Cancelar</button>
+          </p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+<ul class="notes">
+  <li class="good">La sinopsis le da algo que leer mientras espera, y la pantalla queda compuesta de arriba a abajo.</li>
+  <li class="good">La tarjeta separa "la película" de "la máquina": el estado, la barra, el pliegue y cancelar viven juntos.</li>
+  <li class="good">Cancelar queda pequeño y al borde: presente, pero sin invitar a pulsarlo por aburrimiento.</li>
+  <li class="bad">Con historias largas, el pliegue abierto empuja la tarjeta; el desplegable tendría que abrirse hacia arriba o con altura máxima y scroll propio.</li>
+</ul>
+
+<!-- ============ B ============ -->
+<p class="caption"><b>B · banda de progreso a lo ancho (elegida)</b> · la ficha ocupa todo y se desplaza entre cabecera y banda; el progreso es una banda pegada abajo, como un reproductor</p>
+<div class="window">
+  <header>
+    <div class="brand">Mamá Cine<small>sesión continua</small></div>
+    <nav><a href="#">Buscar</a><a href="#">Mis películas</a></nav>
+    <div class="pill"><div class="thumb"></div><span>Vacaciones en Roma</span><div class="mini"><i></i></div><span>62 %</span></div>
+    <button class="gear" title="Ajustes">⚙</button>
+  </header>
+  <main style="padding-bottom: 0; overflow-y: auto;">
+    <div class="film-row" style="margin-bottom: 20px; flex: none;">
+      <div class="poster">V</div>
+      <div class="info">
+        <h1 class="title">Vacaciones en Roma</h1>
+        <p class="factline">1953 <span class="sep">·</span> 1 h 58 min <span class="sep">·</span> comedia romántica</p>
+        <p class="synopsis">Una princesa de visita oficial en Roma se escapa una noche del palacio y conoce a un periodista americano. Él sabe quién es ella; ella no sabe que él lo sabe. Audrey Hepburn ganó el Óscar por esta película.</p>
+        <p class="synopsis" style="color: var(--dim); font-size: 15px;">Con Audrey Hepburn, Gregory Peck y Eddie Albert. Dirigida por William Wyler. Tres premios Óscar: mejor actriz, mejor historia y mejor vestuario.</p>
+        <p class="links"><a class="ext" href="#">Ver la ficha en IMDb ↗</a></p>
+      </div>
+    </div>
+  </main>
+  <div class="band">
+    <p class="status">Descargando 62 %</p>
+    <div class="bar"><i></i></div>
+    <p class="beneath">
+      <span>1,2 GB de 1,9 GB · 4,1 MB/s</span>
+      <span class="fold">Qué ha pasado ▾</span>
+      <button class="cancel">Cancelar</button>
+    </p>
+  </div>
+</div>
+<ul class="notes">
+  <li class="good">La barra a todo lo ancho se lee desde el sofá, y la banda siempre está en el mismo sitio, pase lo que pase arriba.</li>
+  <li class="good">Cuando la descarga termina, la banda se vuelve verde con "Lista para ver" y el botón grande de reproducir: el mismo sitio responde siempre "¿ya está?".</li>
+  <li class="good">La ficha se desplaza entre cabecera y banda. Lo que importa (el progreso, y al acabar el botón de ver) queda clavado abajo, así que el principio de "nada importante bajo el pliegue" se mantiene: lo que se pierde al desplazar es solo lectura.</li>
+</ul>
+
+<!-- ============ C ============ -->
+<p class="caption"><b>C · la misma ficha antes de descargar</b> · la banda elegida en B sirve también para la pantalla de detalle: cambia su contenido, no el layout</p>
+<div class="window">
+  <header>
+    <div class="brand">Mamá Cine<small>sesión continua</small></div>
+    <nav><a class="on" href="#">Buscar</a><a href="#">Mis películas</a></nav>
+    <div class="pill"><div class="thumb"></div><span>Vacaciones en Roma</span><div class="mini"><i></i></div><span>62 %</span></div>
+    <button class="gear" title="Ajustes">⚙</button>
+  </header>
+  <main style="padding-bottom: 0; overflow-y: auto;">
+    <div class="film-row" style="margin-bottom: 20px; flex: none;">
+      <div class="poster" style="background:linear-gradient(160deg,#46586e,#232f3f)">Q</div>
+      <div class="info">
+        <h1 class="title">Qué bello es vivir</h1>
+        <p class="factline">1946 <span class="sep">·</span> 2 h 10 min <span class="sep">·</span> drama</p>
+        <p class="synopsis">La noche de Navidad, un hombre al borde de la ruina desea no haber nacido. Un ángel de segunda le concede verlo: cómo sería su pueblo, su familia y su gente si él nunca hubiera existido.</p>
+        <p class="synopsis" style="color: var(--dim); font-size: 15px;">Con James Stewart y Donna Reed. Dirigida por Frank Capra.</p>
+        <p class="links"><a class="ext" href="#">Ver la ficha en IMDb ↗</a></p>
+      </div>
+    </div>
+  </main>
+  <div class="band">
+    <p class="room" style="margin: 0 0 2px;">Ocupa 1,7 GB · quedan 213 GB libres de 466 GB · tardará alrededor de 12 minutos</p>
+    <p class="chosen">Se descargará en calidad buena, en español</p>
+    <div class="actions" style="margin-top: 12px;">
+      <button class="primary">Descargar</button>
+      <button class="quiet">Otras copias (3)</button>
+    </div>
+  </div>
+</div>
+<ul class="notes">
+  <li class="good">Detalle y descarga son la misma pantalla con la banda cambiada: antes de descargar decide, durante informa, al acabar reproduce. Menos que aprender, menos que mantener.</li>
+  <li class="good">Los datos de espacio y tiempo quedan junto al botón que los necesita, no flotando en la columna.</li>
+  <li class="bad">La sinopsis depende de la clave de TMDB, que es opcional: sin ella, este hueco vuelve a quedarse vacío y hay que degradar con elegancia (la ficha se encoge y la tarjeta sube).</li>
+</ul>
+
+</body>
+</html>

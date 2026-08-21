@@ -1,0 +1,683 @@
+/* Large, calm, high contrast. Nothing important below the fold.
+   The look is "cine de barrio": warm paper, a curtain red, a little old gold. Light follows the
+   machine's daylight default; dark is the same room with the lights down. Both are checked for
+   contrast. Headings are Fraunces; text is Atkinson Hyperlegible, drawn by the Braille Institute
+   to be read without effort. Both travel with the app, because the window never fetches from
+   third parties. */
+
+@font-face {
+  font-family: "Fraunces";
+  font-style: normal;
+  font-weight: 100 900;
+  src: url("vendor/fonts/fraunces-latin.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  font-style: normal;
+  font-weight: 400;
+  src: url("vendor/fonts/atkinson-hyperlegible-latin-400.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Atkinson Hyperlegible";
+  font-style: normal;
+  font-weight: 700;
+  src: url("vendor/fonts/atkinson-hyperlegible-latin-700.woff2") format("woff2");
+}
+
+:root {
+  color-scheme: light dark;
+  --bg: #f6f0e4;
+  --panel: #fffcf4;
+  --line: #e2d7c1;
+  --text: #33291c;
+  --dim: #6f6153;
+  --accent: #8c2f39;
+  --accent-ink: #fff8ee;
+  --gold: #b98a2e;
+  --ok: #3e6f4e;
+  --warn: #8a5a00;
+  --bad: #a4302a;
+  --radius: 14px;
+  --display: "Fraunces", Georgia, serif;
+  --body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  /* content column: full width until 1100px, centered after */
+  --gutter: max(32px, calc((100% - 1100px) / 2));
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #171310;
+    --panel: #211b15;
+    --line: #3b3226;
+    --text: #f0e7d6;
+    --dim: #b3a68e;
+    --accent: #d98b93;
+    --accent-ink: #2a1013;
+    --gold: #d3a856;
+    --ok: #7fbf8f;
+    --warn: #e8c26a;
+    --bad: #ff9a8f;
+  }
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+html, body {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.55 var(--body);
+}
+
+/* the whole app renders inside this, so it is what has to fill the window */
+#app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Buttons keep the border they were born with: none appears on hover, none disappears. A hover
+   is a change of ground, nothing else. */
+button {
+  font: inherit;
+  color: inherit;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 20px;
+  cursor: pointer;
+  transition: background-color .12s ease, transform .08s ease;
+}
+button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 9%, var(--panel)); }
+button:active:not(:disabled) { transform: scale(.98); }
+button:disabled { opacity: .55; cursor: default; }
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 14%, var(--accent));
+}
+/* No button goes naked: a quiet one still sits on its own visible ground, always, not only
+   under the pointer. */
+button.quiet {
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+  border: none;
+  color: var(--dim);
+}
+button.quiet:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 12%, transparent);
+}
+/* the half of a confirm that does the thing: it says so in the colour of what it does */
+button.quiet.bad { color: var(--bad); }
+button.quiet.bad:hover:not(:disabled) {
+  color: var(--bad);
+  background: color-mix(in srgb, var(--bad) 14%, transparent);
+}
+
+/* --- the masthead: the app's name, the two places, the download, the gear ------------------ */
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  padding: 12px var(--gutter);
+  background: var(--panel);
+  border-bottom: 2px solid var(--line);
+}
+/* The mark and the name, and the way home: it dresses like a button under the pointer */
+button.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font: 700 24px/1 var(--display);
+  color: var(--accent);
+  letter-spacing: .01em;
+  white-space: nowrap;
+  background: none;
+  border: none;
+  border-radius: 12px;
+  padding: 5px 12px 5px 6px;
+  margin: -5px -12px -5px -6px;
+  text-align: left;
+}
+button.brand:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+.brand .mark { width: 34px; height: 34px; display: block; border-radius: 8px; }
+header nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+header nav .grow { flex: 1; }
+header nav > button {
+  border: none;
+  background: transparent;
+  color: var(--dim);
+  padding: 10px 18px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+header nav > button:hover:not(:disabled) {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+header nav > button.on {
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 700;
+}
+header nav button.gear { font-size: 20px; padding: 8px 12px; line-height: 1; }
+
+/* The download in progress, present on every screen, gone when there is none. It always names
+   the film the download screen would headline, and counts the rest rather than summarising them. */
+header nav > button.pill {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  padding: 5px 16px 5px 6px;
+  font-size: 15px;
+  color: var(--dim);
+  min-width: 0;
+  max-width: 340px;
+}
+header nav > button.pill:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+}
+header nav > button.pill.on {
+  background: var(--bg);
+  color: var(--dim);
+  border-color: var(--accent);
+  font-weight: 400;
+}
+/* a circle concentric with the pill's rounded cap, so the corners never fight the curve */
+.pill .poster {
+  width: 32px;
+  height: 32px;
+  aspect-ratio: auto;
+  border-radius: 50%;
+  flex: none;
+}
+.pill .pill-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pill .mini {
+  width: 64px;
+  height: 7px;
+  flex: none;
+  border-radius: 999px;
+  background: var(--line);
+  overflow: hidden;
+}
+.pill .mini i { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
+.pill .word { flex: none; font-variant-numeric: tabular-nums; }
+.pill.done .word { color: var(--ok); font-weight: 700; }
+.pill.done .mini i { background: var(--ok); }
+.pill.failed .word { color: var(--bad); font-weight: 700; }
+.badge {
+  flex: none;
+  min-width: 22px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
+/* Something is wrong with the machinery itself. Calm, present on every screen, never a freeze. */
+.problem {
+  padding: 10px var(--gutter);
+  background: var(--panel);
+  color: var(--warn);
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+}
+
+/* --- screens ------------------------------------------------------------------------------- */
+
+/* One screen at a time. Only the active one exists on the page. A plain screen scrolls as one
+   piece; a split screen pins its band and scrolls the ficha between masthead and band. */
+main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.screen {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px var(--gutter) 40px;
+}
+.screen.split {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+}
+.split .scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 22px var(--gutter) 26px;
+}
+
+/* What matters lives here, pinned: the decision before a download, the progress during one, the
+   play button after. Scrolling can only hide reading matter, never these. */
+.band {
+  flex: none;
+  border-top: 2px solid var(--line);
+  background: var(--panel);
+  padding: 14px var(--gutter) 16px;
+  max-height: 55%;
+  overflow-y: auto;
+}
+.band.ok { border-top-color: var(--ok); }
+.band.bad { border-top-color: var(--bad); }
+
+h1 { font: 600 30px/1.2 var(--display); margin: 0 0 4px; letter-spacing: -.005em; }
+h2 { font: 600 20px/1.3 var(--display); margin: 28px 0 12px; }
+p.lead { color: var(--dim); margin: 0 0 24px; font-size: 16px; }
+
+/* Search */
+.search-row { display: flex; gap: 12px; margin-bottom: 14px; }
+.search-box { position: relative; flex: 1; }
+input[type="search"] {
+  width: 100%;
+  font: inherit;
+  font-size: 19px;
+  padding: 15px 18px;
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+input[type="search"]:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+/* Titles offered while she types, so a misspelling is a tap rather than a dead end */
+.suggestions {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 30px rgba(51, 41, 28, .2);
+  overflow: hidden;
+}
+.suggestion {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  width: 100%;
+  border: none;
+  border-radius: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 14px;
+  text-align: left;
+}
+.suggestion:last-child { border-bottom: none; }
+.suggestion:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+}
+.suggestion:active:not(:disabled) { transform: none; }
+.suggestion .poster { width: 38px; aspect-ratio: 2 / 3; border-radius: 6px; flex: none; }
+.suggestion .name { display: block; font-weight: 700; }
+.suggestion .meta { display: block; color: var(--dim); font-size: 14px; }
+
+.chips { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.chip { padding: 8px 16px; border-radius: 999px; font-size: 15px; }
+.chip.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 700; }
+
+/* One card per film, big enough to read across the room */
+.films {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 22px;
+  margin-top: 26px;
+}
+/* A result card has one action: open it. Everything else lives in the detail view. */
+.film {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  text-align: left;
+  contain: content;
+  transition: box-shadow .12s ease, transform .08s ease;
+}
+.film:hover:not(:disabled) {
+  background: var(--panel);
+  box-shadow: 0 6px 20px rgba(51, 41, 28, .16);
+}
+/* the poster arrives a moment after the card, so the space it will fill looks deliberate */
+.poster {
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  display: block;
+  overflow: hidden;
+  background: color-mix(in srgb, var(--panel) 60%, var(--line));
+}
+.poster img { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* no cover: a drawn filmstrip, so the card looks finished rather than broken */
+.poster.blank { display: grid; place-items: center; }
+.poster.none { background: color-mix(in srgb, var(--panel) 55%, var(--line)); }
+.poster .mark {
+  width: 42%;
+  max-width: 78px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  color: var(--dim);
+  opacity: .5;
+}
+.film .caption { padding: 13px 14px 12px; display: block; }
+.film .name {
+  display: block;
+  font-weight: 700;
+  line-height: 1.3;
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+}
+.film .meta { display: block; color: var(--dim); font-size: 14px; margin-top: 5px; }
+
+/* The one action left on a settings row: a word, not a button the size of a real one */
+button.link {
+  padding: 7px 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--dim);
+  font-size: 14px;
+  border-radius: 10px;
+  text-align: center;
+}
+button.link:hover:not(:disabled) {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+}
+button.link.bad { color: var(--bad); }
+
+/* The ficha: the film fills the screen, the machinery waits in the band */
+.now { display: flex; gap: 32px; align-items: flex-start; margin-top: 10px; }
+.now .poster { width: 240px; flex: none; border-radius: var(--radius); }
+.now .detail { flex: 1; min-width: 0; }
+.now h1 { font-size: 34px; }
+.factline { color: var(--dim); margin: 0 0 14px; }
+.factline .sep { color: var(--gold); }
+/* something to read while she decides, or while she waits; absent without a TMDB key */
+.synopsis { margin: 0 0 10px; max-width: 62ch; }
+
+/* What the season holds, before she decides. A list she can count, not a folder of file names. */
+.episode-names { list-style: none; margin: 0 0 14px; padding: 0; max-width: 62ch;
+                 columns: 2; column-gap: 28px; }
+.episode-names li { color: var(--dim); font-size: 16px; padding: 3px 0;
+                    break-inside: avoid; }
+.episode-names .which { display: inline-block; min-width: 2ch; color: var(--gold);
+                        text-align: right; margin-right: 8px; }
+@media (max-width: 720px) { .episode-names { columns: 1; } }
+.status { font-size: 20px; margin: 0 0 10px; font-weight: 700; }
+.status.working { color: var(--accent); }
+.status.done { color: var(--ok); }
+.status.failed { color: var(--bad); }
+.bar { height: 16px; border-radius: 999px; background: var(--bg); border: 1px solid var(--line); overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); transition: width .4s ease; }
+.band.ok .bar > i { background: var(--ok); }
+.beneath { color: var(--dim); margin: 9px 0 0; font-size: 15px; }
+.actions { display: flex; gap: 12px; margin-top: 16px; flex-wrap: wrap; align-items: center; }
+
+/* The decision reads as one line: what it costs on the left, the button on the right. Stacked,
+   the facts left a column of short lines against an empty half of the window. */
+.band.decision { display: flex; flex-wrap: wrap; align-items: center; gap: 14px 32px; }
+.band.decision .facts {
+  flex: 1 1 340px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.band.decision .facts p { margin: 0; }
+.band.decision .fact-row { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 20px; }
+.band.decision .actions { flex: none; margin-top: 0; }
+.band.decision .versions { flex-basis: 100%; margin-top: 0; }
+.band.decision .confirm { display: flex; align-items: center; gap: 10px; color: var(--dim); }
+
+/* Whether she will understand it, said as a state. The way to look again is one small button
+   beside it, because subtitles that are already there are not an errand. */
+.subtitles { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; font-size: 17px; }
+.subtitles.ok .what { color: var(--ok); }
+.subtitles.bad .what { color: var(--warn); }
+.subtitles .find {
+  padding: 6px 12px;
+  font-size: 14px;
+  border-radius: 999px;
+  color: var(--dim);
+}
+.subtitles .find:hover:not(:disabled) { color: var(--accent); }
+
+/* The one button the page is for. Bigger than the rest, and it says what it plays. */
+.primary.play { font-size: 19px; padding: 14px 26px; }
+.eyebrow { color: var(--gold); margin: 0 0 4px; font-size: 15px;
+           letter-spacing: .08em; text-transform: uppercase; }
+
+/* More than one download: the others are one tap away, never invisible */
+.also {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  color: var(--dim);
+  font-size: 15px;
+  margin-bottom: 10px;
+}
+
+/* inside the results grid, so it sits across the whole width rather than in the first column */
+.empty { grid-column: 1 / -1; color: var(--dim); padding: 48px 0; text-align: center; font-size: 16px; }
+.now-empty { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 90px 0; }
+.now-empty p { margin: 0; font-size: 18px; }
+/* A neutral notice is neutral: gold, never the curtain red, which is for actions and failures.
+   "Funciona" with a red edge read as something wrong. */
+.note {
+  background: var(--panel);
+  border-left: 3px solid var(--gold);
+  border-radius: 8px;
+  padding: 13px 16px;
+  margin: 16px 0;
+  white-space: pre-line; /* the settings check answers one line per service */
+}
+.note.bad { border-left-color: var(--bad); }
+
+/* Settings: the folder and the language are hers; everything technical waits behind a fold */
+#screen-ajustes .inner { max-width: 640px; }
+#screen-ajustes label {
+  display: block;
+  margin: 14px 0;
+  color: var(--dim);
+  font-size: 15px;
+}
+#screen-ajustes input {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  font: inherit;
+  padding: 12px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+}
+#screen-ajustes input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#screen-ajustes .pair { display: flex; gap: 16px; }
+#screen-ajustes .pair label { flex: 1; }
+
+#screen-ajustes .folder { display: flex; gap: 10px; align-items: stretch; margin-top: 6px; }
+#screen-ajustes .folder input { margin-top: 0; }
+#screen-ajustes .folder button { white-space: nowrap; }
+
+/* closed, the summary's own padding is the whole box, so it sits centred; open, the container
+   grows a floor and the first heading drops its section-break margin */
+#screen-ajustes .technical {
+  margin-top: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px 16px;
+  background: var(--panel);
+}
+#screen-ajustes .technical[open] { padding-bottom: 16px; }
+#screen-ajustes .technical summary {
+  cursor: pointer;
+  padding: 12px 0;
+  color: var(--dim);
+  font-size: 16px;
+}
+#screen-ajustes .technical h2:first-of-type { margin-top: 10px; }
+#screen-ajustes .hint { color: var(--dim); font-size: 14px; margin: 0 0 12px; }
+.indexer {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--bg);
+}
+#screen-ajustes .indexer label { margin: 8px 0; }
+.indexer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
+#screen-ajustes .switch { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; color: var(--dim); font-size: 14px; }
+#screen-ajustes .switch input { width: auto; margin: 0; }
+
+/* The shape of the answer while it is on its way */
+.film.waiting { pointer-events: none; }
+.film.waiting .poster,
+.film.waiting .line {
+  background: color-mix(in srgb, var(--panel) 60%, var(--line));
+  background-size: 220% 100%;
+  animation: sweep 1.3s ease-in-out infinite;
+}
+.film.waiting .line {
+  display: block;
+  height: 13px;
+  border-radius: 4px;
+  margin-bottom: 9px;
+}
+.film.waiting .line.short { width: 55%; }
+
+@keyframes sweep {
+  from { background-position: 180% 0; }
+  to { background-position: -40% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .film.waiting .poster, .film.waiting .line { animation: none; }
+}
+
+/* Which copy is being taken, and the way to take a different one */
+.chosen { color: var(--dim); margin: 6px 0 0; font-size: 16px; }
+.versions { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
+.version {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  text-align: left;
+  padding: 14px 16px;
+  width: 100%;
+}
+.version .what { font-weight: 700; }
+.version .who { color: var(--dim); font-size: 15px; }
+.version .mark { margin-left: auto; color: var(--accent); font-size: 15px; }
+
+/* A season is watched from here: episodes named as she counts them, each one a row that opens
+   its own page rather than starting something without saying so. */
+.episodes { display: flex; flex-direction: column; gap: 10px; max-width: 640px; margin: 16px 0 10px; }
+.episode { text-align: left; padding: 13px 16px; font-size: 18px;
+           display: flex; align-items: center; gap: 16px; }
+.episode .which {
+  flex: none;
+  min-width: 2ch;
+  color: var(--gold);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.episode .what { flex: 1; min-width: 0; }
+.episode .name { display: block; }
+.episode .meta { display: block; color: var(--dim); font-size: 14px; margin-top: 2px; }
+/* Which evening will have nothing to read, said where she chooses the evening */
+.episode .without { color: var(--warn); font-size: 15px; flex: none; }
+.episode .go { color: var(--dim); flex: none; }
+.episode:hover:not(:disabled) .go { color: var(--accent); }
+
+/* Whether it fits and how long it will take, in words, where she decides */
+.room { margin: 0; color: var(--ok); font-size: 17px; }
+.room.bad { color: var(--warn); margin-top: 6px; }
+
+/* What the app has done to this film. The latest line lives under the headline; the whole story
+   waits behind a fold, because a growing timestamped list reads as a log, not a screen. */
+.latest { color: var(--dim); margin: 14px 0 0; font-size: 16px; }
+.story-fold { margin-top: 10px; }
+.story-fold summary { color: var(--dim); font-size: 14px; cursor: pointer; }
+.story { list-style: none; margin: 10px 0 0; padding: 14px 16px; border-radius: var(--radius);
+         background: var(--panel); border: 1px solid var(--line); }
+.story li { display: flex; gap: 12px; padding: 5px 0; color: var(--dim); font-size: 15px; }
+.story li.now { color: var(--text); }
+.story .when { color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
+
+/* Going back is one button, in the same place on every detail screen. Its ground hugs the
+   words and hangs into the gutter, so the arrow still lines up with the content edge. */
+.back { margin: 0 0 14px -12px; padding: 8px 12px; border-radius: 10px; }
+.now .detail h1 { margin-top: 0; }
+
+/* The disk, drawn: what is taken, what this download would take, what is left */
+.meter {
+  display: inline-flex;
+  width: 150px;
+  height: 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  overflow: hidden;
+  vertical-align: middle;
+  flex: none;
+}
+.meter .used { display: block; height: 100%; background: var(--dim); opacity: .55; }
+.meter .slice { display: block; height: 100%; background: var(--accent); }
+.meter.low .used { background: var(--warn); opacity: .8; }
+.room-disk {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0 0;
+  color: var(--dim);
+  font-size: 15px;
+}
+
+/* Only exists while the disk is actually getting tight: the number, and the action, on every
+   screen. The full fact lives on the shelf, beside the films that occupy it. */
+.space {
+  padding: 10px var(--gutter);
+  background: var(--panel);
+  color: var(--warn);
+  border-bottom: 1px solid var(--line);
+  font-size: 15px;
+}

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mamá Cine · exploración de diseño</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 48px 24px; background: #f4f2ee; color: #2c2a26; font: 16px/1.6 system-ui, sans-serif; }
+  .wrap { max-width: 720px; margin: 0 auto; }
+  h1 { font-size: 26px; margin: 0 0 6px; }
+  .sub { color: #6d675e; margin: 0 0 32px; }
+  h2 { font-size: 18px; margin: 32px 0 10px; }
+  a.card {
+    display: block; background: #fff; border: 1px solid #ddd8ce; border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 12px; text-decoration: none; color: inherit;
+  }
+  a.card:hover { border-color: #8c2f39; }
+  a.card b { display: block; margin-bottom: 2px; }
+  a.card span { color: #6d675e; font-size: 14px; }
+  .reco { border-left: 4px solid #8c2f39; }
+  p.note { color: #6d675e; font-size: 14px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Mamá Cine · exploración de diseño</h1>
+  <p class="sub">Maquetas estáticas para decidir layout y estilo antes de tocar la aplicación. Las páginas de estilo cargan tipografías de Google Fonts, así que necesitan internet; la aplicación real las llevaría empaquetadas en <code>ui/vendor</code>.</p>
+
+  <h2>Icono</h2>
+  <a class="card" href="../icons/index.html"><b>Iteraciones de icono</b><span>Cinco candidatos tipográficos en SVG, a cuatro tamaños y en bandejas simuladas.</span></a>
+
+  <h2>Layout</h2>
+  <a class="card" href="layouts.html"><b>Iteraciones de layout</b><span>A: barra inferior actual · B: cabecera con identidad y píldora de descarga (recomendado) · C: barra lateral</span></a>
+
+  <h2>Detalle y descarga</h2>
+  <a class="card reco" href="detalle-iteraciones.html"><b>Iteraciones de la ficha</b><span>A: progreso como tarjeta anclada · B: banda a lo ancho (elegida, con la ficha desplazable entre cabecera y banda) · C: la banda antes de descargar</span></a>
+
+  <p class="note"><b>Decidido:</b> layout B (cabecera con identidad), estilo 1 (cine de barrio), ficha B (banda de progreso, contenido desplazable en medio).</p>
+
+  <h2>Estilo</h2>
+  <a class="card reco" href="estilo-cine-de-barrio.html"><b>1 · Cine de barrio (recomendado)</b><span>Papel cálido, granate y dorado. Fraunces + Atkinson Hyperlegible.</span></a>
+  <a class="card" href="estilo-patio.html"><b>2 · Patio</b><span>Cal, azulejo y naranja. Bricolage Grotesque + Nunito Sans.</span></a>
+  <a class="card" href="estilo-sesion-de-noche.html"><b>3 · Sesión de noche</b><span>Sala oscura, dorado y telón. Playfair Display + Alegreya Sans.</span></a>
+
+  <p class="note">Las tres páginas de estilo usan el layout B para que se comparen solo el color y la letra. Los pósters son degradados de relleno: en la aplicación real serían las carátulas.</p>
+</div>
+</body>
+</html>

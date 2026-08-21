@@ -1,0 +1,27 @@
+{
+  "1": {
+    "title": "The Red Turtle",
+    "year": "2016",
+    "cover_url": null,
+    "imdb": "3666024",
+    "info": {
+      "fps": 24.0,
+      "duration_seconds": 4820.0,
+      "audio_languages": [],
+      "subtitle_languages": []
+    },
+    "subtitle_files": ["es"],
+    "series": false,
+    "settled": true,
+    "subtitle_note": "Subtítulos en español añadidos (3)",
+    "key": "imdb:3666024",
+    "folder": "/home/somebody/films/The Red Turtle",
+    "file": "/home/somebody/films/The Red Turtle/turtle.mkv",
+    "attempt": 1,
+    "attempts_total": 1,
+    "superseded_by": null,
+    "gave_up": false,
+    "remaining": [],
+    "filed_as": "The Red Turtle"
+  }
+}

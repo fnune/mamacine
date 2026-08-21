@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Estilo 3 · sesión de noche</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@500;600;700&family=Alegreya+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  /* Palette: dark hall, gold letters, curtain red. The lights just went down. */
+  :root {
+    --bg: #191614;
+    --panel: #242019;
+    --line: #3b342a;
+    --text: #f2ead9;
+    --dim: #b3a68f;
+    --accent: #d8a94e;
+    --accent-ink: #241a08;
+    --curtain: #93353c;
+    --ok: #7fbf8f;
+    --bad: #e2837a;
+    --radius: 12px;
+    --display: "Playfair Display", serif;
+    --body: "Alegreya Sans", system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #35302a; font: 17.5px/1.55 var(--body); color: var(--text); padding: 36px 20px 80px; }
+
+  .spec { max-width: 960px; margin: 0 auto 28px; color: #e8e0d0; }
+  .spec h1 { font: 600 26px var(--display); margin: 0 0 6px; }
+  .spec p { margin: 0 0 10px; font-size: 15px; }
+  .swatches { display: flex; gap: 8px; }
+  .swatch { width: 84px; height: 40px; border-radius: 8px; border: 1px solid rgba(255,255,255,.2);
+            font-size: 11px; display: flex; align-items: end; justify-content: center; padding-bottom: 3px; color: #eee; }
+
+  .window {
+    max-width: 960px; height: 600px; margin: 26px auto; background: var(--bg);
+    border-radius: 12px; overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,.5);
+    display: flex; flex-direction: column;
+  }
+  .caption { max-width: 960px; margin: 0 auto -18px; font-size: 14px; color: #c9c0ae; }
+
+  header {
+    display: flex; align-items: center; gap: 22px; padding: 14px 26px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .brand { font: 700 24px/1 var(--display); color: var(--accent); letter-spacing: .02em; }
+  .brand small { display: block; font: 500 11px var(--body); letter-spacing: .24em; text-transform: uppercase; color: var(--dim); margin-top: 3px; }
+  header nav { display: flex; gap: 6px; }
+  header nav a { text-decoration: none; color: var(--dim); font-size: 17px; padding: 10px 18px; border-radius: 999px; }
+  header nav a.on { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
+  .pill {
+    margin-left: auto; display: flex; align-items: center; gap: 10px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 999px; padding: 6px 16px 6px 6px;
+    font-size: 15px; color: var(--dim);
+  }
+  .pill .thumb { width: 30px; height: 42px; border-radius: 5px; background: linear-gradient(160deg, #8a6a50, #4a3627); }
+  .pill .mini { width: 70px; height: 7px; border-radius: 99px; background: var(--line); overflow: hidden; }
+  .pill .mini i { display: block; height: 100%; width: 62%; background: var(--accent); }
+  .gear { border: none; background: none; font-size: 21px; color: var(--dim); cursor: pointer; padding: 8px; }
+
+  main { flex: 1; overflow: hidden; padding: 26px 32px; }
+
+  h1.greet { font: 600 30px/1.2 var(--display); margin: 0 0 4px; }
+  p.lead { color: var(--dim); margin: 0 0 20px; }
+  .search-row { display: flex; gap: 12px; margin-bottom: 24px; }
+  input[type="search"] {
+    flex: 1; font: 19px var(--body); padding: 15px 20px; border-radius: var(--radius);
+    border: 1px solid var(--line); background: var(--panel); color: var(--text);
+  }
+  input::placeholder { color: #8d8471; }
+  button.primary {
+    font: 700 17px var(--body); background: var(--accent); color: var(--accent-ink);
+    border: none; border-radius: var(--radius); padding: 12px 26px; cursor: pointer;
+  }
+  .films { display: grid; grid-template-columns: repeat(5, 1fr); gap: 20px; }
+  .film {
+    background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    overflow: hidden; text-align: left; padding: 0; cursor: pointer; font: inherit; color: inherit;
+  }
+  .poster { aspect-ratio: 2 / 3; display: flex; align-items: center; justify-content: center;
+            font: 600 44px var(--display); color: rgba(242,234,217,.85); }
+  .film .name { display: block; font-weight: 700; padding: 10px 12px 2px; line-height: 1.25; }
+  .film .meta { display: block; color: var(--dim); font-size: 14px; padding: 0 12px 11px; }
+
+  .now { display: flex; gap: 30px; }
+  .now .poster { width: 230px; flex: none; border-radius: var(--radius); font-size: 64px; }
+  .now h1 { font: 600 34px/1.15 var(--display); margin: 0 0 2px; }
+  .now .year { color: var(--dim); }
+  .status { font-size: 21px; color: var(--accent); margin: 20px 0 10px; font-weight: 700; }
+  .bar { height: 16px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); overflow: hidden; }
+  .bar i { display: block; height: 100%; width: 62%; background: linear-gradient(90deg, var(--curtain), var(--accent)); }
+  .beneath { color: var(--dim); margin-top: 10px; }
+  .fold { margin-top: 12px; color: var(--dim); font-size: 14px; }
+  .actions { margin-top: 26px; display: flex; gap: 12px; }
+  button.quiet { font: 17px var(--body); background: none; border: none; color: var(--dim); cursor: pointer; padding: 12px 10px; }
+</style>
+</head>
+<body>
+
+<div class="spec">
+  <h1>Estilo 3 · sesión de noche</h1>
+  <p>Sala a oscuras, letras doradas, telón al fondo. Titulares en <strong>Playfair Display</strong>, texto en <strong>Alegreya Sans</strong> (humanista, dibujada en Argentina). La más "de cine", pero oscura siempre: en un salón con sol puede costar más leerla.</p>
+  <div class="swatches">
+    <div class="swatch" style="background:#191614">sala</div>
+    <div class="swatch" style="background:#d8a94e;color:#241a08">dorado</div>
+    <div class="swatch" style="background:#93353c">telón</div>
+    <div class="swatch" style="background:#f2ead9;color:#241a08">marfil</div>
+    <div class="swatch" style="background:#7fbf8f;color:#241a08">bien</div>
+  </div>
+</div>
+
+<p class="caption">Pantalla de buscar</p>
+<div class="window">
+  <header>
+    <div class="brand">Mamá Cine<small>sesión de noche</small></div>
+    <nav><a class="on" href="#">Buscar</a><a href="#">Mis películas</a></nav>
+    <div class="pill"><div class="thumb"></div><span>Vacaciones en Roma</span><div class="mini"><i></i></div><span>62 %</span></div>
+    <button class="gear" title="Ajustes">⚙</button>
+  </header>
+  <main>
+    <h1 class="greet">¿Qué te apetece ver hoy?</h1>
+    <p class="lead">Escribe el nombre de una película o de una serie.</p>
+    <div class="search-row">
+      <input type="search" placeholder="Cantando bajo la lluvia…">
+      <button class="primary">Buscar</button>
+    </div>
+    <div class="films">
+      <button class="film"><div class="poster" style="background:linear-gradient(160deg,#7a4a2c,#3d2314)">C</div><span class="name">Cinema Paradiso</span><span class="meta">1988</span></button>
+      <button class="film"><div class="poster" style="background:linear-gradient(160deg,#3e6f4e,#1c3323)">V</div><span class="name">El viaje de Chihiro</span><span class="meta">2001</span></button>
+      <button class="film"><div class="poster" style="background:linear-gradient(160deg,#46586e,#1e2733)">Q</div><span class="name">Qué bello es vivir</span><span class="meta">1946</span></button>
+      <button class="film"><div class="poster" style="background:linear-gradient(160deg,#a8842e,#55400f)">C</div><span class="name">Cantando bajo la lluvia</span><span class="meta">1952</span></button>
+      <button class="film"><div class="poster" style="background:linear-gradient(160deg,#93353c,#43151a)">L</div><span class="name">Los chicos del coro</span><span class="meta">2004</span></button>
+    </div>
+  </main>
+</div>
+
+<p class="caption">Pantalla de descarga</p>
+<div class="window">
+  <header>
+    <div class="brand">Mamá Cine<small>sesión de noche</small></div>
+    <nav><a href="#">Buscar</a><a href="#">Mis películas</a></nav>
+    <div class="pill"><div class="thumb"></div><span>Vacaciones en Roma</span><div class="mini"><i></i></div><span>62 %</span></div>
+    <button class="gear" title="Ajustes">⚙</button>
+  </header>
+  <main>
+    <div class="now">
+      <div class="poster" style="background:linear-gradient(160deg,#8a6a50,#4a3627)">V</div>
+      <div style="flex:1">
+        <h1>Vacaciones en Roma</h1>
+        <div class="year">1953</div>
+        <p class="status">Descargando 62 %</p>
+        <div class="bar"><i></i></div>
+        <p class="beneath">1,2 GB de 1,9 GB · 4,1 MB/s</p>
+        <p class="fold">Qué ha pasado ▾</p>
+        <div class="actions"><button class="quiet">Cancelar la descarga</button></div>
+      </div>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

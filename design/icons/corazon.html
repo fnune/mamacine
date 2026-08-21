@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mamá Cine · la eme con corazón</title>
+<style>
+  @font-face {
+    font-family: "Fraunces";
+    font-style: normal;
+    font-weight: 100 900;
+    src: url("../../ui/vendor/fonts/fraunces-latin.woff2") format("woff2");
+  }
+  @font-face {
+    font-family: "Atkinson Hyperlegible";
+    font-weight: 400;
+    src: url("../../ui/vendor/fonts/atkinson-hyperlegible-latin-400.woff2") format("woff2");
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 40px 24px 80px; background: #ececec; color: #333;
+         font: 15px/1.5 system-ui, sans-serif; }
+  .intro { max-width: 980px; margin: 0 auto 12px; }
+  .intro h1 { font-size: 24px; margin: 0 0 8px; }
+  .intro p { color: #666; margin: 0 0 6px; }
+
+  .candidate { max-width: 980px; margin: 32px auto 0; background: #fff; border: 1px solid #ddd;
+               border-radius: 12px; padding: 20px 24px; }
+  .candidate h2 { font-size: 17px; margin: 0 0 2px; }
+  .candidate .why { color: #666; margin: 0 0 16px; font-size: 14px; }
+  .row { display: flex; align-items: flex-end; gap: 22px; flex-wrap: wrap; }
+  .row figure { margin: 0; text-align: center; }
+  .row figcaption { font-size: 11px; color: #999; margin-top: 4px; }
+
+  .tray { display: flex; align-items: center; gap: 14px; border-radius: 8px;
+          padding: 7px 14px; width: fit-content; }
+  .tray.dark { background: #1c1f26; color: #cdd3dd; }
+  .tray.light { background: #e8eaee; color: #444; border: 1px solid #d5d8de; }
+  .tray svg { display: block; }
+  .tray .clock { font-size: 13px; font-variant-numeric: tabular-nums; }
+
+  /* the app's masthead, as styles.css draws it, with the icon beside the wordmark */
+  .head { display: flex; align-items: center; gap: 20px; padding: 12px 26px;
+          border-bottom: 2px solid var(--line); background: var(--panel); width: 520px;
+          border-radius: 10px 10px 0 0; font-family: "Atkinson Hyperlegible", system-ui, sans-serif; }
+  .head.light { --panel: #fffcf4; --line: #e2d7c1; --accent: #8c2f39; --dim: #6f6153; --gold: #b98a2e; --ink: #fff8ee; }
+  .head.dark { --panel: #211b15; --line: #3b3226; --accent: #d98b93; --dim: #b3a68e; --gold: #d3a856; --ink: #2a1013; }
+  .head .brand { display: flex; align-items: center; gap: 10px; }
+  .head .brand svg { display: block; }
+  .head .word { font: 700 24px/1 "Fraunces", Georgia, serif; color: var(--accent); }
+  .head .word small { display: block; font: 400 10px "Atkinson Hyperlegible", system-ui, sans-serif;
+                      letter-spacing: .22em; text-transform: uppercase; color: var(--gold); margin-top: 3px; }
+  .head nav { display: flex; gap: 6px; margin-left: 6px; }
+  .head nav span { padding: 10px 18px; border-radius: 999px; color: var(--dim); font-size: 17px; }
+  .head nav span.on { background: var(--accent); color: var(--ink); font-weight: 700; }
+  .heads { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 16px; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="tray-wifi" viewBox="0 0 24 24">
+      <path d="M2 9a15 15 0 0 1 20 0l-2.2 2.5a11.7 11.7 0 0 0-15.6 0z" fill="currentColor" opacity=".8"/>
+      <path d="M6 13.5a9 9 0 0 1 12 0l-2.3 2.6a5.6 5.6 0 0 0-7.4 0z" fill="currentColor" opacity=".8"/>
+      <circle cx="12" cy="19" r="2.2" fill="currentColor" opacity=".8"/>
+    </symbol>
+    <symbol id="tray-vol" viewBox="0 0 24 24">
+      <path d="M4 9h4l6-5v16l-6-5H4z" fill="currentColor" opacity=".8"/>
+      <path d="M17 8a6 6 0 0 1 0 8" stroke="currentColor" stroke-width="2" fill="none" opacity=".8"/>
+    </symbol>
+    <path id="heart" d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1-1.1a5.5 5.5 0 0 0-7.8 7.8l1 1L12 21l7.8-7.6 1-1a5.5 5.5 0 0 0 0-7.8z"/>
+  </defs>
+</svg>
+
+<div class="intro">
+  <h1>La eme con corazón · dónde va el corazón</h1>
+  <p>Seis colocaciones del mismo par: la M de Fraunces y un corazón dorado más grande que en la primera ronda. Cada una a cuatro tamaños, en las dos bandejas, y puesta en la cabecera real de la aplicación, clara y oscura.</p>
+</div>
+
+<script>
+  const GOLD = '#e9b949';
+  const CREAM = '#fff8ee';
+  const RED = '#8c2f39';
+
+  // a heart of `size` px centred on (cx, cy), turned `tilt` degrees, in the 64-unit icon
+  const heart = (cx, cy, size, tilt, fill = GOLD) => {
+    const s = size / 24;
+    return `<use href="#heart" fill="${fill}"
+      transform="translate(${(cx - 12 * s).toFixed(2)} ${(cy - 12 * s).toFixed(2)}) scale(${s.toFixed(3)}) rotate(${tilt} 12 12)"/>`;
+  };
+  const eme = (x, y, size, fill = CREAM) =>
+    `<text x="${x}" y="${y}" text-anchor="middle" fill="${fill}"
+       font-family="Fraunces, Georgia, serif" font-weight="650" font-size="${size}">M</text>`;
+  const icon = (body) =>
+    `<svg viewBox="0 0 64 64"><rect width="64" height="64" rx="15" fill="${RED}"/>${body}</svg>`;
+
+  const VARIANTS = [
+    ['1 · acento, más grande',
+     'La primera ronda con el corazón a 17 px en vez de 12, sobre el trazo derecho, ladeado como una tilde.',
+     icon(eme(29, 50, 42) + heart(47, 14, 17, 14))],
+    ['2 · en el valle',
+     'El corazón se posa en la V de la M, centrado: las dos formas se abrazan en vez de convivir.',
+     icon(eme(32, 50, 42) + heart(32, 26, 15, 0))],
+    ['3 · en el valle, hundido',
+     'Igual, pero el corazón cae dentro del valle y tapa los trazos: más gráfico, menos tipográfico.',
+     icon(eme(32, 52, 46) + heart(32, 29, 19, 0))],
+    ['4 · de remate',
+     'Corazón grande y ladeado en la esquina, tangente al trazo derecho, y la M corrida a la izquierda para hacerle sitio.',
+     icon(eme(27, 51, 40) + heart(49, 15, 20, 18))],
+    ['5 · corona',
+     'Centrado encima, sin ladear, como una corona pequeña: simétrico y tranquilo.',
+     icon(eme(32, 53, 40) + heart(32, 12, 15, 0))],
+    ['6 · en el valle, a juego',
+     'La colocación 2 con el corazón del color de la M: una sola figura, sin segundo color que pueda perderse a 16 px.',
+     icon(eme(32, 50, 42) + heart(32, 26, 15, 0, CREAM))],
+  ];
+
+  const sized = (svg, size) => svg.replace('<svg ', `<svg width="${size}" height="${size}" `);
+
+  const tray = (svg, theme) => `
+    <div class="tray ${theme}">
+      <svg width="18" height="18"><use href="#tray-wifi"/></svg>
+      <svg width="18" height="18"><use href="#tray-vol"/></svg>
+      ${sized(svg, 18)}
+      <span class="clock">14:32</span>
+    </div>`;
+
+  const head = (svg, theme) => `
+    <div class="head ${theme}">
+      <div class="brand">${sized(svg, 34)}
+        <div class="word">Mamá Cine<small>sesión continua</small></div></div>
+      <nav><span class="on">Buscar</span><span>Mis películas</span></nav>
+    </div>`;
+
+  document.body.insertAdjacentHTML('beforeend', VARIANTS.map(([name, why, svg]) => `
+    <div class="candidate">
+      <h2>${name}</h2>
+      <p class="why">${why}</p>
+      <div class="row">
+        ${[96, 48, 22, 16].map((size) => `
+          <figure>${sized(svg, size)}<figcaption>${size} px</figcaption></figure>`).join('')}
+        <figure>${tray(svg, 'dark')}<figcaption>bandeja oscura</figcaption></figure>
+        <figure>${tray(svg, 'light')}<figcaption>bandeja clara</figcaption></figure>
+      </div>
+      <div class="heads">${head(svg, 'light')}${head(svg, 'dark')}</div>
+    </div>`).join(''));
+</script>
+
+</body>
+</html>

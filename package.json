@@ -1,0 +1,14 @@
+{
+  "name": "mama-cine-ui-tests",
+  "private": true,
+  "type": "module",
+  "description": "Only for testing the interface. The app itself has no build step and no runtime dependencies.",
+  "scripts": {
+    "test": "node --test ui/*.test.js"
+  },
+  "devDependencies": {
+    "htm": "^3.1.1",
+    "jsdom": "^25.0.1",
+    "preact": "^10.29.8"
+  }
+}
