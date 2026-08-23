@@ -1,6 +1,6 @@
 # Agent instructions
 
-The principles this repository is held to are in [engineering/README.md](engineering/README.md). Read that first. The current review of the app, what has been fixed and what is left, is in [REVIEW.md](REVIEW.md).
+The principles this repository is held to are in [engineering/README.md](engineering/README.md). Read that first.
 
 ## Layout
 

@@ -149,7 +149,7 @@ function Pill({ film, others, on, onOpen }) {
   const percent = settled ? 100 : Math.round(film.percent || 0);
   return html`
     <button class="pill ${settled ? 'done' : failed ? 'failed' : ''} ${on ? 'on' : ''}"
-            id="pill" data-screen="pelicula" title=${film.title} onClick=${onOpen}>
+            id="pill" data-screen="film" title=${film.title} onClick=${onOpen}>
       <${Poster} url=${film.cover_url} />
       <span class="pill-name">${film.title}</span>
       ${failed
@@ -260,7 +260,7 @@ function Search({ state, actions }) {
     ...state.seasons.map((item) => ({ item, series: true })),
   ].sort((a, b) => (b.item.relevance ?? 0) - (a.item.relevance ?? 0));
   return html`
-    <section class="screen" id="screen-buscar">
+    <section class="screen" id="screen-search">
       <h1 id="search-title">¿Qué te apetece ver hoy?</h1>
       <p class="lead" id="search-lead">Escribe el nombre de una película o de una serie.</p>
 
@@ -326,9 +326,9 @@ function Detail({ state, actions }) {
 
   // The ficha fills the screen and scrolls; the decision waits in the band, pinned below it.
   return html`
-    <section class="screen split" id="screen-detalle">
+    <section class="screen split" id="screen-detail">
       <div class="scroll">
-        <button class="quiet back" onClick=${() => actions.show('buscar')}>← Volver</button>
+        <button class="quiet back" onClick=${() => actions.show('search')}>← Volver</button>
         <div class="now">
           <${Poster} url=${item.cover_url} alt=${item.title || item.show} />
           <div class="detail">
@@ -437,10 +437,10 @@ function Now({ state, actions }) {
   const film = state.watching;
   if (!film) {
     return html`
-      <section class="screen" id="screen-pelicula">
+      <section class="screen" id="screen-film">
         <div class="empty now-empty" id="now-empty">
           <p>Ahora mismo no se está descargando nada.</p>
-          <button class="primary" onClick=${() => actions.show('buscar')}>Buscar algo</button>
+          <button class="primary" onClick=${() => actions.show('search')}>Buscar algo</button>
         </div>
       </section>`;
   }
@@ -455,7 +455,7 @@ function Now({ state, actions }) {
   // The film fills the screen; the machinery is a band pinned below, like a player. The same
   // spot answers "¿ya está?" from start to finish, and turns green when the answer is yes.
   return html`
-    <section class="screen split" id="screen-pelicula">
+    <section class="screen split" id="screen-film">
       <div class="scroll">
         ${others.length > 0 && html`
           <div class="also" id="also-downloading">
@@ -497,7 +497,7 @@ function Now({ state, actions }) {
                 <button class="primary" onClick=${() => actions.openOwned(film.id)}>
                   Ver los episodios
                 </button>`}
-              <button class="quiet" onClick=${() => actions.show('buscar')}>Buscar otra</button>
+              <button class="quiet" onClick=${() => actions.show('search')}>Buscar otra</button>
             <//>`}
           ${failed && html`
             <${Fragment}>
@@ -506,7 +506,7 @@ function Now({ state, actions }) {
                   Probar más copias (quedan ${film.untried})
                 </button>`}
               <button class=${film.untried > 0 ? 'quiet' : 'primary'}
-                      onClick=${() => actions.show('buscar')}>Buscar otra</button>
+                      onClick=${() => actions.show('search')}>Buscar otra</button>
             <//>`}
           ${!settled && !failed && html`
             <button class="quiet" onClick=${() => actions.cancel(film.id)}>
@@ -521,7 +521,7 @@ function Now({ state, actions }) {
 function Shelf({ state, actions }) {
   const films = state.progress.shelf || [];
   return html`
-    <section class="screen" id="screen-mias">
+    <section class="screen" id="screen-library">
       <h1>Mis películas y series</h1>
       <p class="lead">Todo lo que ya está en este ordenador.</p>
       ${state.progress.total_bytes > 0 && html`
@@ -577,8 +577,8 @@ function Owned({ state, actions }) {
   const film = (state.progress.shelf || []).find((item) => item.id === state.ownedId);
   if (!film) {
     return html`
-      <section class="screen" id="screen-guardada">
-        <button class="quiet back" onClick=${() => actions.show('mias')}>← Volver</button>
+      <section class="screen" id="screen-owned">
+        <button class="quiet back" onClick=${() => actions.show('library')}>← Volver</button>
         <div class="empty" id="owned-gone">Esto ya no está en este ordenador.</div>
       </section>`;
   }
@@ -586,9 +586,9 @@ function Owned({ state, actions }) {
   const first = episodes[0];
   const spoken = spokenIn(film);
   return html`
-    <section class="screen split" id="screen-guardada">
+    <section class="screen split" id="screen-owned">
       <div class="scroll">
-        <button class="quiet back" onClick=${() => actions.show('mias')}>← Volver</button>
+        <button class="quiet back" onClick=${() => actions.show('library')}>← Volver</button>
         <div class="now">
           <${Poster} url=${film.cover_url} alt=${film.title} />
           <div class="detail">
@@ -658,15 +658,15 @@ function EpisodeScreen({ state, actions }) {
   const episode = (state.ownedEpisodes || [])[state.episodeAt];
   if (!film || !episode) {
     return html`
-      <section class="screen" id="screen-episodio">
-        <button class="quiet back" onClick=${() => actions.show('mias')}>← Volver</button>
+      <section class="screen" id="screen-episode">
+        <button class="quiet back" onClick=${() => actions.show('library')}>← Volver</button>
         <div class="empty" id="episode-gone">Ese episodio ya no está en la carpeta.</div>
       </section>`;
   }
   return html`
-    <section class="screen split" id="screen-episodio">
+    <section class="screen split" id="screen-episode">
       <div class="scroll">
-        <button class="quiet back" onClick=${() => actions.show('guardada')}>← Volver</button>
+        <button class="quiet back" onClick=${() => actions.show('owned')}>← Volver</button>
         <div class="now">
           <${Poster} url=${film.cover_url} alt=${film.title} />
           <div class="detail">
@@ -706,7 +706,7 @@ const WITHHELD = ['news_password', 'subtitles_password'];
 
 function Settings({ state, actions }) {
   const settings = state.settings;
-  if (!settings) return html`<section class="screen" id="screen-ajustes"></section>`;
+  if (!settings) return html`<section class="screen" id="screen-settings"></section>`;
 
   const field = (name, label, extra = {}) => html`
     <label>${label}
@@ -715,7 +715,7 @@ function Settings({ state, actions }) {
              onInput=${(event) => actions.setSetting(name, event.target.value)} /></label>`;
 
   return html`
-    <section class="screen" id="screen-ajustes">
+    <section class="screen" id="screen-settings">
       <div class="inner">
       <h1>Ajustes</h1>
       <p class="lead">Esto se rellena una vez. Después no hay que volver aquí.</p>
@@ -823,7 +823,7 @@ function Settings({ state, actions }) {
 
 function App() {
   const [state, setState] = useState({
-    screen: 'buscar',
+    screen: 'search',
     query: '',
     placeholder: `${pick(SUGGESTIONS)}…`,
     suggestions: [],
@@ -891,7 +891,7 @@ function App() {
     invoke('read_settings')
       .then((settings) => change({
         settings,
-        screen: settings.ready ? 'buscar' : 'ajustes',
+        screen: settings.ready ? 'search' : 'settings',
       }))
       .catch(() => {});
   }, []);
@@ -965,7 +965,7 @@ function App() {
       edit((state) => ({
         screen,
         notice: null,
-        watching: state.screen === 'pelicula' && screen !== 'pelicula'
+        watching: state.screen === 'film' && screen !== 'film'
           && ['done', 'failed'].includes(state.watching?.status)
           ? null
           : state.watching,
@@ -1051,7 +1051,7 @@ function App() {
       change({
         detail: item, detailSeries: series, have: null, downloadingId: null,
         versions: null, showVersions: false, synopsis: '', seasonEpisodes: [],
-        screen: 'detalle', notice: null,
+        screen: 'detail', notice: null,
       });
       // the synopsis is garnish: without a TMDB key there is none, and the ficha stands without
       // it, so a refusal here changes nothing she can act on
@@ -1095,7 +1095,7 @@ function App() {
           status: 'starting',
           percent: 0,
         },
-        screen: 'pelicula',
+        screen: 'film',
       });
     },
 
@@ -1112,13 +1112,13 @@ function App() {
         status: 'starting',
         percent: 0,
       };
-      change({ watching, screen: 'pelicula', notice: null });
+      change({ watching, screen: 'film', notice: null });
       try {
         const grabbed = await invoke('grab',
                                      { index: detail.index, version, series: detailSeries });
         if (grabbed.already) {
           // nothing was started: she has it already, and the film screen would be a lie
-          change({ watching: null, have: grabbed.id, screen: 'detalle' });
+          change({ watching: null, have: grabbed.id, screen: 'detail' });
           return;
         }
         change({ watching: { ...latest.current.watching, id: grabbed.id } });
@@ -1146,7 +1146,7 @@ function App() {
 
     cancel: async (id) => {
       if (id) await invoke('cancel', { id });
-      change({ watching: null, screen: 'buscar' });
+      change({ watching: null, screen: 'search' });
     },
 
     // a button that fails silently is the app lying by omission
@@ -1161,7 +1161,7 @@ function App() {
         ownedSynopsis: '',
         episodeAt: null,
         shelfNotice: null,
-        screen: 'guardada',
+        screen: 'owned',
       });
       invoke('library_synopsis', { id })
         .then((words) => {
@@ -1182,7 +1182,7 @@ function App() {
       }
     },
 
-    openEpisode: (position) => change({ episodeAt: position, screen: 'episodio' }),
+    openEpisode: (position) => change({ episodeAt: position, screen: 'episode' }),
 
     play: (film) => invoke('play', { id: film.id }).catch(actions.tell('shelfNotice')),
 
@@ -1198,7 +1198,7 @@ function App() {
       try {
         await invoke('remove_film', { id: film.id });
         change({
-          screen: 'mias',
+          screen: 'library',
           ownedId: null,
           shelfNotice: {
             text: `${film.title} se ha enviado a la papelera. Desde allí todavía se puede recuperar.`,
@@ -1282,13 +1282,13 @@ function App() {
   };
 
   const screens = {
-    buscar: Search,
-    detalle: Detail,
-    pelicula: Now,
-    mias: Shelf,
-    guardada: Owned,
-    episodio: EpisodeScreen,
-    ajustes: Settings,
+    search: Search,
+    detail: Detail,
+    film: Now,
+    library: Shelf,
+    owned: Owned,
+    episode: EpisodeScreen,
+    settings: Settings,
   };
   const Screen = screens[state.screen] || Search;
   const following = state.watching;
@@ -1300,23 +1300,23 @@ function App() {
   // the gear for the screen she fills once. Ajustes earns an icon, not a tab.
   return html`
     <header>
-      <button class="brand" title="Volver al inicio" onClick=${() => actions.show('buscar')}>
+      <button class="brand" title="Volver al inicio" onClick=${() => actions.show('search')}>
         <img class="mark" src="icon.svg" alt="" />
         <span>Mamá Cine</span>
       </button>
       <nav>
-        ${[['buscar', 'Buscar'], ['mias', 'Mi colección']].map(([screen, label]) => html`
+        ${[['search', 'Buscar'], ['library', 'Mi colección']].map(([screen, label]) => html`
           <button key=${screen} data-screen=${screen}
                   class=${state.screen === screen ? 'on' : ''}
                   onClick=${() => actions.show(screen)}>${label}</button>`)}
         <span class="grow"></span>
         ${following && html`
           <${Pill} film=${following} others=${otherDownloads}
-                   on=${state.screen === 'pelicula'}
-                   onOpen=${() => actions.show('pelicula')} />`}
-        <button class=${`gear ${state.screen === 'ajustes' ? 'on' : ''}`} data-screen="ajustes"
+                   on=${state.screen === 'film'}
+                   onOpen=${() => actions.show('film')} />`}
+        <button class=${`gear ${state.screen === 'settings' ? 'on' : ''}`} data-screen="settings"
                 title="Ajustes" aria-label="Ajustes"
-                onClick=${() => actions.show('ajustes')}>⚙</button>
+                onClick=${() => actions.show('settings')}>⚙</button>
       </nav>
     </header>
     ${lowOnSpace(state.progress) && html`<div id="space" class="space">

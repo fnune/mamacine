@@ -125,7 +125,7 @@ const click = (app, target) =>
 
 // The shelf is a grid of covers now: every card opens the page of the thing, and nothing else.
 async function openOwned(app, position = 0) {
-  click(app, app.document.querySelector('nav button[data-screen="mias"]'));
+  click(app, app.document.querySelector('nav button[data-screen="library"]'));
   await settle();
   click(app, app.document.querySelectorAll('#shelf .film')[position]);
   await settle();
@@ -154,12 +154,12 @@ test('the page renders as a page', async () => {
 
   const root = app.document.getElementById('app');
   assert.deepEqual([...root.children].map((node) => node.tagName), ['HEADER', 'MAIN']);
-  assert.ok(app.document.getElementById('screen-buscar'), 'the search screen is a section');
+  assert.ok(app.document.getElementById('screen-search'), 'the search screen is a section');
   assert.equal(app.document.querySelector('#search button[type="submit"]').textContent.trim(), 'Buscar');
   assert.match(app.document.querySelector('header .brand').textContent, /Mamá Cine/,
     'the app is called by its name on screen');
   const tabs = [...app.document.querySelectorAll('nav button')];
-  assert.deepEqual(tabs.map((tab) => tab.dataset.screen), ['buscar', 'mias', 'ajustes'],
+  assert.deepEqual(tabs.map((tab) => tab.dataset.screen), ['search', 'library', 'settings'],
     'two places and a gear; the download appears only while there is one');
 });
 
@@ -321,12 +321,12 @@ test('good news is never dressed in the failure color', () => {
 test('the wordmark is the way home', async () => {
   const app = start();
   await settle();
-  click(app, app.document.querySelector('nav button[data-screen="mias"]'));
+  click(app, app.document.querySelector('nav button[data-screen="library"]'));
   await settle();
-  assert.ok(!app.document.getElementById('screen-buscar'), 'she is elsewhere');
+  assert.ok(!app.document.getElementById('screen-search'), 'she is elsewhere');
   click(app, app.document.querySelector('header .brand'));
   await settle();
-  assert.ok(app.document.getElementById('screen-buscar'));
+  assert.ok(app.document.getElementById('screen-search'));
 });
 
 test('a series suggestion searches by its proper name', async () => {
@@ -417,7 +417,7 @@ test('a fresh window adopts a film that is mid-chase instead of claiming idlenes
   ];
   const app = start({ finished });
   await app.poll();
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
 
   assert.ok(!app.document.getElementById('now-empty'), 'not idle');
@@ -436,7 +436,7 @@ test('a film already on its way is shown as such, never offered again', async ()
     /Ya se está descargando/);
   click(app, app.document.getElementById('watch-download'));
   await settle();
-  assert.equal(app.document.getElementById('screen-pelicula').hidden, false);
+  assert.equal(app.document.getElementById('screen-film').hidden, false);
   assert.equal(app.document.getElementById('now-title').textContent, 'El Sur');
 });
 
@@ -476,7 +476,7 @@ test('a film being downloaded takes over the screen straight away', async () => 
   click(app, app.document.getElementById('download'));
   await settle();
 
-  assert.equal(app.document.getElementById('screen-pelicula').hidden, false);
+  assert.equal(app.document.getElementById('screen-film').hidden, false);
   assert.equal(app.document.getElementById('now-title').textContent, 'El Sur');
 });
 
@@ -511,7 +511,7 @@ test('a season opens as a season and downloads as one', async () => {
   await settle();
 
   assert.match(app.document.getElementById('detail-title').textContent, /Cuéntame · Temporada 1/);
-  assert.match(app.document.getElementById('screen-detalle').textContent, /episodios/);
+  assert.match(app.document.getElementById('screen-detail').textContent, /episodios/);
   click(app, app.document.getElementById('download'));
   await settle();
   const grab = app.calls.find((call) => call.command === 'grab');
@@ -532,7 +532,7 @@ test('a season says how many episodes it holds, and names them', async () => {
     .find((node) => /Cuéntame/.test(node.textContent)));
   await settle();
 
-  const detail = app.document.getElementById('screen-detalle');
+  const detail = app.document.getElementById('screen-detail');
   assert.match(detail.textContent, /Son 3 episodios/);
   const named = app.document.getElementById('episode-names');
   assert.equal(named.querySelectorAll('li').length, 2, 'an unnamed episode is not invented');
@@ -554,7 +554,7 @@ test('a pack of several seasons counts its episodes without listing them all', a
     .find((node) => /Cuéntame/.test(node.textContent)));
   await settle();
 
-  assert.match(app.document.getElementById('screen-detalle').textContent, /Son 3 episodios/);
+  assert.match(app.document.getElementById('screen-detail').textContent, /Son 3 episodios/);
   assert.equal(app.document.getElementById('episode-names'), null);
 });
 
@@ -565,7 +565,7 @@ test('a season nobody could identify still opens, without an episode list', asyn
     .find((node) => /Cuéntame/.test(node.textContent)));
   await settle();
 
-  const detail = app.document.getElementById('screen-detalle');
+  const detail = app.document.getElementById('screen-detail');
   assert.match(detail.textContent, /Son varios episodios/);
   assert.equal(app.document.getElementById('episode-names'), null);
   assert.doesNotMatch(detail.textContent, /IMDb/);
@@ -583,7 +583,7 @@ test('a film she owns opens its own page, and plays by id from there', async () 
   await openOwned(app);
 
   assert.ok(!app.calls.some((call) => call.command === 'play'), 'opening is not playing');
-  const page = app.document.getElementById('screen-guardada');
+  const page = app.document.getElementById('screen-owned');
   assert.match(page.querySelector('h1').textContent, /El Sur/);
   assert.match(page.textContent, /Una niña y su padre/, 'what it is about, on its own page');
 
@@ -612,7 +612,7 @@ test('a season on the shelf opens as episodes, each with a page of its own', asy
   await settle();
   await openOwned(app);
 
-  assert.ok(app.document.getElementById('screen-guardada'), 'its own screen');
+  assert.ok(app.document.getElementById('screen-owned'), 'its own screen');
   const rows = [...app.document.querySelectorAll('.episode')];
   assert.equal(rows.length, 3);
   assert.match(rows[0].textContent, /El retorno del fugitivo/, 'named where the database names it');
@@ -622,7 +622,7 @@ test('a season on the shelf opens as episodes, each with a page of its own', asy
   click(app, rows[1]);
   await settle();
   assert.ok(!app.calls.some((call) => call.command === 'play_episode'), 'opening is not playing');
-  assert.ok(app.document.getElementById('screen-episodio'), 'the episode has a page');
+  assert.ok(app.document.getElementById('screen-episode'), 'the episode has a page');
   assert.match(app.document.getElementById('episode-of').textContent, /Cuéntame/);
 
   click(app, app.document.getElementById('play-episode'));
@@ -650,7 +650,7 @@ test('an episode page says what happens in it, where the database says so', asyn
   click(app, app.document.querySelector('.episode'));
   await settle();
 
-  const page = app.document.getElementById('screen-episodio');
+  const page = app.document.getElementById('screen-episode');
   assert.match(page.querySelector('h1').textContent, /El retorno del fugitivo/);
   assert.match(page.textContent, /Los Alcántara estrenan televisión/);
   assert.match(page.textContent, /Episodio 1/, 'which episode it is, still said');
@@ -673,7 +673,7 @@ test('the episode without subtitles is the one that says so', async () => {
   });
   await settle();
   await openOwned(app);
-  assert.match(app.document.getElementById('screen-guardada').textContent,
+  assert.match(app.document.getElementById('screen-owned').textContent,
                /Faltan los subtítulos del episodio 2/);
 
   const rows = [...app.document.querySelectorAll('.episode')];
@@ -701,16 +701,16 @@ test('a film can be removed from its page, with one chance to change her mind', 
   click(app, app.document.getElementById('remove'));
   await settle();
   assert.ok(!app.calls.some((call) => call.command === 'remove_film'), 'not yet');
-  assert.match(app.document.getElementById('screen-guardada').textContent, /¿Seguro?/);
+  assert.match(app.document.getElementById('screen-owned').textContent, /¿Seguro?/);
 
-  const confirm = [...app.document.querySelectorAll('#screen-guardada button')]
+  const confirm = [...app.document.querySelectorAll('#screen-owned button')]
     .find((button) => button.textContent.includes('Sí, quitar'));
   click(app, confirm);
   await settle();
   assert.equal(app.calls.find((call) => call.command === 'remove_film').args.id, 42);
-  assert.ok(app.document.getElementById('screen-mias'), 'and she lands back among her films');
-  assert.match(app.document.getElementById('screen-mias').textContent, /papelera/);
-  assert.match(app.document.getElementById('screen-mias').textContent, /se puede recuperar/,
+  assert.ok(app.document.getElementById('screen-library'), 'and she lands back among her films');
+  assert.match(app.document.getElementById('screen-library').textContent, /papelera/);
+  assert.match(app.document.getElementById('screen-library').textContent, /se puede recuperar/,
     'recoverable is a fact she should have');
 });
 
@@ -739,7 +739,7 @@ test('the page says which subtitles are there, and offers to look again', async 
   await settle();
   await settle();
   assert.equal(missing.calls.find((call) => call.command === 'fetch_subtitles').args.id, 42);
-  assert.match(missing.document.getElementById('screen-guardada').textContent, /añadidos/);
+  assert.match(missing.document.getElementById('screen-owned').textContent, /añadidos/);
 });
 
 // The download rides the masthead as a pill: it answers "¿cómo va lo mío?" from any screen,
@@ -747,7 +747,7 @@ test('the page says which subtitles are there, and offers to look again', async 
 test('the download follows her to every screen, and only exists while there is one', async () => {
   const idle = start();
   await idle.poll();
-  assert.ok(!idle.document.querySelector('nav button[data-screen="pelicula"]'),
+  assert.ok(!idle.document.querySelector('nav button[data-screen="film"]'),
     'nothing coming down, nothing to follow');
 
   const active = [
@@ -759,7 +759,7 @@ test('the download follows her to every screen, and only exists while there is o
   const app = start({ active });
   await app.poll();
 
-  const pill = app.document.querySelector('nav button[data-screen="pelicula"]');
+  const pill = app.document.querySelector('nav button[data-screen="film"]');
   assert.match(pill.textContent, /El Sur/, 'it names the film the download screen headlines');
   assert.match(pill.textContent, /62 %/);
   assert.match(app.document.getElementById('pill-count').textContent, /\+1/,
@@ -767,7 +767,7 @@ test('the download follows her to every screen, and only exists while there is o
 
   click(app, pill);
   await settle();
-  assert.equal(app.document.getElementById('screen-pelicula').hidden, false);
+  assert.equal(app.document.getElementById('screen-film').hidden, false);
 });
 
 // A download she watched settle is over: leaving the screen retires it and the pill with it,
@@ -778,15 +778,15 @@ test('a settled download is retired by walking away from it', async () => {
                beneath: '', speed: '', year: '1983', series: false }],
   });
   await app.poll();
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
 
-  click(app, app.document.querySelector('nav button[data-screen="buscar"]'));
+  click(app, app.document.querySelector('nav button[data-screen="search"]'));
   await settle();
-  assert.ok(app.document.querySelector('nav button[data-screen="pelicula"]'),
+  assert.ok(app.document.querySelector('nav button[data-screen="film"]'),
     'walking away from a download still going does not abandon it');
 
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
   app.live.active = [];
   app.live.finished = [
@@ -796,18 +796,18 @@ test('a settled download is retired by walking away from it', async () => {
   ];
   await app.poll();
   assert.match(app.document.getElementById('now-status').textContent, /Lista para ver/);
-  assert.match(app.document.querySelector('nav button[data-screen="pelicula"]').textContent,
+  assert.match(app.document.querySelector('nav button[data-screen="film"]').textContent,
     /Lista/, 'the pill says so too');
 
-  click(app, app.document.querySelector('nav button[data-screen="buscar"]'));
+  click(app, app.document.querySelector('nav button[data-screen="search"]'));
   await settle();
-  assert.ok(!app.document.querySelector('nav button[data-screen="pelicula"]'),
+  assert.ok(!app.document.querySelector('nav button[data-screen="film"]'),
     'seen and left behind: the pill retires with it');
 });
 
 // The space her question deserves: what the film is about, where its page is. Both are garnish
 // from the film database; without a key the ficha stands without them.
-test('the film page tells what it is about when the ficha knows', async () => {
+test('the film page tells what it is about when the film database knows', async () => {
   const words = 'Un maestro republicano enseña a un niño lo que es la libertad.';
   const app = start({ synopsis: words });
   await searchFor(app, 'el sur');
@@ -816,7 +816,7 @@ test('the film page tells what it is about when the ficha knows', async () => {
   await settle();
 
   assert.match(app.document.getElementById('synopsis').textContent, new RegExp('maestro'));
-  assert.match(app.document.getElementById('screen-detalle').textContent, /Ver la ficha en IMDb/);
+  assert.match(app.document.getElementById('screen-detail').textContent, /Ver la ficha en IMDb/);
 
   const bare = start();
   await searchFor(bare, 'el sur');
@@ -834,7 +834,7 @@ test('free space is drawn on the shelf, not on a strip of its own', async () => 
   await plenty.poll();
   assert.ok(!plenty.document.querySelector('footer'), 'no strip');
   assert.ok(!plenty.document.getElementById('space'), 'nothing to warn about');
-  click(plenty, plenty.document.querySelector('nav button[data-screen="mias"]'));
+  click(plenty, plenty.document.querySelector('nav button[data-screen="library"]'));
   await settle();
   const disk = plenty.document.getElementById('shelf-disk');
   assert.match(disk.textContent, /412 GB libres/);
@@ -853,7 +853,7 @@ test('a disk getting tight becomes a banner naming the way out', async () => {
   assert.match(banner.textContent, /Queda poco sitio/);
   assert.match(banner.textContent, /15 GB libres/);
   assert.match(banner.textContent, /Quita alguna película/, 'the action is named beside it');
-  click(tight, tight.document.querySelector('nav button[data-screen="mias"]'));
+  click(tight, tight.document.querySelector('nav button[data-screen="library"]'));
   await settle();
   assert.ok(tight.document.querySelector('#shelf-disk .meter.low'),
     'the shelf bar turns urgent too');
@@ -878,7 +878,7 @@ test('a film she already has offers to play it rather than to download it again'
   click(app, app.document.querySelector('#results .film'));
   await settle();
 
-  const detail = app.document.getElementById('screen-detalle');
+  const detail = app.document.getElementById('screen-detail');
   assert.match(detail.textContent, /Ya tienes esta película/);
   assert.ok(!app.document.getElementById('download'), 'downloading it twice is not offered');
 
@@ -895,7 +895,7 @@ test('a season she already has is called a season and opens its episodes', async
     .find((node) => /Cuéntame/.test(node.textContent)));
   await settle();
 
-  const detail = app.document.getElementById('screen-detalle');
+  const detail = app.document.getElementById('screen-detail');
   assert.match(detail.textContent, /Ya tienes esta temporada/);
   assert.ok(!/Ya tienes esta película/.test(detail.textContent), 'a season is not a película');
   assert.ok([...detail.querySelectorAll('button')]
@@ -923,7 +923,7 @@ test('a copy that turns out to be dead is followed to the next one', async () =>
   await settle();
   await app.poll();
 
-  const screen = app.document.getElementById('screen-pelicula');
+  const screen = app.document.getElementById('screen-film');
   assert.match(screen.textContent, /Descargando/, 'it is still going');
   assert.ok(!/no he podido/i.test(screen.textContent), 'nothing has failed yet');
   // "Copia 2 de 4" was bookkeeping: a count she cannot use, that changed while she read it
@@ -1031,7 +1031,7 @@ test('the give-up sentence is not said twice above the fold', async () => {
   await settle();
   await app.poll();
 
-  const screen = app.document.getElementById('screen-pelicula');
+  const screen = app.document.getElementById('screen-film');
   const outsideTheFold = screen.textContent.replace(
     app.document.querySelector('.story')?.textContent ?? '', '');
   const times = outsideTheFold.split('la única copia que había').length - 1;
@@ -1053,7 +1053,7 @@ test('when every copy has been tried it says so once, and stops', async () => {
   await settle();
   await app.poll();
 
-  const screen = app.document.getElementById('screen-pelicula');
+  const screen = app.document.getElementById('screen-film');
   assert.match(screen.textContent, /No he podido conseguirla/);
   assert.match(screen.textContent, /venían dañadas/);
   assert.ok(!app.document.getElementById('try-more'),
@@ -1095,10 +1095,10 @@ test('a paused download says it is paused, and why when the disk is the reason',
   ];
   const app = start({ active, free_bytes: 3 * 1024 ** 3, free_space: '3 GB' });
   await app.poll();
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
 
-  const screen = app.document.getElementById('screen-pelicula');
+  const screen = app.document.getElementById('screen-film');
   assert.match(app.document.getElementById('now-status').textContent, /En pausa/);
   assert.match(screen.textContent, /disco está casi lleno/);
 });
@@ -1122,7 +1122,7 @@ test('every running download is reachable from the download screen', async () =>
   ];
   const app = start({ active });
   await app.poll();
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
 
   assert.equal(app.document.getElementById('now-title').textContent, 'El Sur');
@@ -1141,7 +1141,7 @@ test('the shelf is her disk, not what the downloader happens to remember', async
   ];
   const app = start({ finished, shelf: [] });
   await settle();
-  click(app, app.document.querySelector('nav button[data-screen="mias"]'));
+  click(app, app.document.querySelector('nav button[data-screen="library"]'));
   await settle();
 
   assert.match(app.document.getElementById('shelf').textContent, /Todavía no hay nada aquí/);
@@ -1150,7 +1150,7 @@ test('the shelf is her disk, not what the downloader happens to remember', async
 // Settings is the one screen he will use, and the indexer is the part most likely to change.
 const openSettings = async (app) => {
   await settle();
-  click(app, app.document.querySelector('nav button[data-screen="ajustes"]'));
+  click(app, app.document.querySelector('nav button[data-screen="settings"]'));
   await settle();
 };
 
@@ -1168,7 +1168,7 @@ const type = (app, field, value) => {
 test('two settings typed one after the other are both kept', async () => {
   const app = start();
   await openSettings(app);
-  press(app, '#screen-ajustes button', 'Añadir otro buscador');
+  press(app, '#screen-settings button', 'Añadir otro buscador');
   await settle();
 
   const fields = app.document.querySelectorAll('.indexer')[1].querySelectorAll('input');
@@ -1176,7 +1176,7 @@ test('two settings typed one after the other are both kept', async () => {
   type(app, fields[1], 'https://otro.test');
   type(app, fields[2], 'su-clave');
   await settle();
-  press(app, '#screen-ajustes .actions button', 'Guardar');
+  press(app, '#screen-settings .actions button', 'Guardar');
   await settle();
   await settle();
 
@@ -1194,7 +1194,7 @@ test('an indexer can be turned off without being thrown away', async () => {
   box.checked = false;
   box.dispatchEvent(new app.window.Event('change', { bubbles: true }));
   await settle();
-  press(app, '#screen-ajustes .actions button', 'Guardar');
+  press(app, '#screen-settings .actions button', 'Guardar');
   await settle();
   await settle();
 
@@ -1208,10 +1208,10 @@ test('a stored password is never sent back to the screen', async () => {
   // holding up its own end, in case one ever arrives
   const app = start({ settings: { ...SETTINGS, news_password: 'la-de-su-cuenta' } });
   await openSettings(app);
-  const values = [...app.document.querySelectorAll('#screen-ajustes input')]
+  const values = [...app.document.querySelectorAll('#screen-settings input')]
     .map((field) => field.value);
   assert.ok(!values.includes('la-de-su-cuenta'), 'nothing that looks like a password is filled in');
-  const password = app.document.querySelector('#screen-ajustes input[name="news_password"]');
+  const password = app.document.querySelector('#screen-settings input[name="news_password"]');
   assert.equal(password.value, '');
   assert.equal(password.getAttribute('placeholder'), 'sin cambios');
 });
@@ -1229,7 +1229,7 @@ test('where films are saved is chosen, never typed', async () => {
 test('the settings screen is where she lands when nothing is filled in yet', async () => {
   const app = start({ settings: { ready: false, indexers: [], news_port: 563, language: 'any' } });
   await settle();
-  assert.ok(app.document.getElementById('screen-ajustes'), 'there is nowhere else to go yet');
+  assert.ok(app.document.getElementById('screen-settings'), 'there is nowhere else to go yet');
 });
 
 // The old check validated whatever was loaded at startup, which is exactly the thing being replaced.
@@ -1239,13 +1239,13 @@ test('comprobar checks the values as typed, not as last saved', async () => {
   const key = app.document.querySelectorAll('.indexer input')[2];
   type(app, key, 'clave-nueva');
   await settle();
-  press(app, '#screen-ajustes .actions button', 'Comprobar');
+  press(app, '#screen-settings .actions button', 'Comprobar');
   await settle();
   await settle();
 
   const checked = app.calls.find((call) => call.command === 'check_settings');
   assert.equal(checked.args.incoming.indexers[0].key, 'clave-nueva');
-  assert.match(app.document.getElementById('screen-ajustes').textContent, /funciona/);
+  assert.match(app.document.getElementById('screen-settings').textContent, /funciona/);
 });
 
 // Which language she wants is a fact about her, asked once here, never a chip in her path.
@@ -1254,13 +1254,13 @@ test('her language lives in the settings and travels with the save', async () =>
   await openSettings(app);
   click(app, app.document.querySelector('#language .chip[data-lang="es"]'));
   await settle();
-  press(app, '#screen-ajustes .actions button', 'Guardar');
+  press(app, '#screen-settings .actions button', 'Guardar');
   await settle();
   await settle();
 
   const sent = app.calls.find((call) => call.command === 'save_settings').args.incoming;
   assert.equal(sent.language, 'es');
-  assert.ok(!app.document.querySelector('#screen-buscar .chip'), 'no language chips while searching');
+  assert.ok(!app.document.querySelector('#screen-search .chip'), 'no language chips while searching');
 });
 
 test('the optional film database key lives with the technical settings', async () => {
@@ -1270,7 +1270,7 @@ test('the optional film database key lives with the technical settings', async (
   assert.ok(field, 'the TMDB key is configurable');
   type(app, field, 'una-clave-tmdb');
   await settle();
-  press(app, '#screen-ajustes .actions button', 'Guardar');
+  press(app, '#screen-settings .actions button', 'Guardar');
   await settle();
   await settle();
   const sent = app.calls.find((call) => call.command === 'save_settings').args.incoming;
@@ -1290,7 +1290,7 @@ test('the startup and tray switches are mom-level settings', async () => {
   autostart.checked = true;
   autostart.dispatchEvent(new app.window.Event('change', { bubbles: true }));
   await settle();
-  press(app, '#screen-ajustes .actions button', 'Guardar');
+  press(app, '#screen-settings .actions button', 'Guardar');
   await settle();
   await settle();
   const sent = app.calls.find((call) => call.command === 'save_settings').args.incoming;
@@ -1305,7 +1305,7 @@ test('the technical settings wait behind a fold', async () => {
   assert.equal(technical.tagName, 'DETAILS');
   assert.ok(technical.querySelector('#indexers'), 'the indexers are inside it');
   assert.ok(technical.querySelector('input[name="news_host"]'), 'so is the news server');
-  const simple = app.document.querySelector('#screen-ajustes .folder');
+  const simple = app.document.querySelector('#screen-settings .folder');
   assert.ok(simple, 'the folder chooser is not');
 });
 
@@ -1350,13 +1350,13 @@ test('every id the stylesheet styles is an id the app actually renders', async (
   };
   // the download screen is reached through the pill, which needs a download; it holds no
   // styled ids of its own beyond what the walk below already renders
-  for (const screen of ['buscar', 'mias', 'ajustes']) {
+  for (const screen of ['search', 'library', 'settings']) {
     click(app, app.document.querySelector(`nav button[data-screen="${screen}"]`));
     await settle();
     collect();
   }
   // the detail screen is reached by opening a film, not from the tabs
-  click(app, app.document.querySelector('nav button[data-screen="buscar"]'));
+  click(app, app.document.querySelector('nav button[data-screen="search"]'));
   await settle();
   await searchFor(app, 'el sur');
   collect();
@@ -1371,15 +1371,15 @@ test('every id the stylesheet styles is an id the app actually renders', async (
 test('the settings fields are stacked, not run together on one line', async () => {
   const app = start({ settings: SETTINGS });
   await settle();
-  click(app, app.document.querySelector('nav button[data-screen="ajustes"]'));
+  click(app, app.document.querySelector('nav button[data-screen="settings"]'));
   await settle();
 
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
-  assert.match(css, /#screen-ajustes label \{[^}]*display: block/, 'labels own their line');
-  assert.match(css, /#screen-ajustes input \{[^}]*width: 100%/, 'boxes fill that line');
+  assert.match(css, /#screen-settings label \{[^}]*display: block/, 'labels own their line');
+  assert.match(css, /#screen-settings input \{[^}]*width: 100%/, 'boxes fill that line');
   // the tick box is the one input that must not stretch across the screen
-  assert.match(css, /#screen-ajustes \.switch input \{[^}]*width: auto/);
-  assert.ok(app.document.querySelector('#screen-ajustes .switch input[type="checkbox"]'));
+  assert.match(css, /#screen-settings \.switch input \{[^}]*width: auto/);
+  assert.ok(app.document.querySelector('#screen-settings .switch input[type="checkbox"]'));
 });
 
 // The shelf holds seasons too, and said "Mis películas" over them, so a season that had downloaded
@@ -1391,10 +1391,10 @@ test('the shelf says it holds series, not only films', async () => {
   ];
   const app = start({ shelf });
   await settle();
-  click(app, app.document.querySelector('nav button[data-screen="mias"]'));
+  click(app, app.document.querySelector('nav button[data-screen="library"]'));
   await settle();
 
-  const screen = app.document.getElementById('screen-mias');
+  const screen = app.document.getElementById('screen-library');
   assert.match(screen.querySelector('h1').textContent, /Mis películas y series/);
   assert.match(app.document.getElementById('shelf').textContent, /Serie/);
 });
@@ -1418,12 +1418,12 @@ test('everything the app does on its own is written down where she can read it',
   const app = start({ active });
   await settle();
   await app.poll();
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
 
   const latest = app.document.getElementById('story-latest');
   assert.match(latest.textContent, /otra versión/, 'the latest line is in plain sight');
-  const lines = [...app.document.querySelectorAll('#screen-pelicula .story li')];
+  const lines = [...app.document.querySelectorAll('#screen-film .story li')];
   assert.equal(lines.length, 3, 'the whole story, not just the latest line');
   assert.match(lines[1].textContent, /venía dañada/);
   // the technical reason stays within reach without being said out loud
@@ -1433,7 +1433,7 @@ test('everything the app does on its own is written down where she can read it',
 
 // "Copia 3 de 7. Esa copia estaba incompleta: faltaban 71 de 6257 partes." named two things she
 // has no meaning for, about a download she could not tell apart from the one she was watching.
-test('the download screen never says copia, partes or a status code', async () => {
+test('the download screen never says the words copia, partes or a status code', async () => {
   const active = [
     { id: 8, title: 'El Sur', status: 'downloading', percent: 3, cover_url: null, year: '1983',
       beneath: 'Unos 40 minutos', speed: '25 MB/s', attempt: 3, attempts_total: 3, series: false,
@@ -1443,10 +1443,10 @@ test('the download screen never says copia, partes or a status code', async () =
   const app = start({ active });
   await settle();
   await app.poll();
-  click(app, app.document.querySelector('nav button[data-screen="pelicula"]'));
+  click(app, app.document.querySelector('nav button[data-screen="film"]'));
   await settle();
 
-  const spoken = app.document.getElementById('screen-pelicula').textContent;
+  const spoken = app.document.getElementById('screen-film').textContent;
   for (const jargon of [/\bCopia \d/, /\bpartes\b/, /FAILURE/, /HEALTH/, /\bpar2\b/, /\bnzb/i]) {
     assert.ok(!jargon.test(spoken), `"${jargon}" is on her screen`);
   }

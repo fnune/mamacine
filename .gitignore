@@ -3,6 +3,5 @@ dist/
 gen/
 node_modules/
 .direnv/
+.env
 settings.json
-dist/
-node_modules/

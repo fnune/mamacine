@@ -88,6 +88,7 @@ This is not a style preference. The prototype read credentials through a global 
 
 ### Writing style
 
+- The interface is in Spanish, because the person it is for reads Spanish. Everything else is in English: identifiers, comments, tests, documentation and commit messages. A screen name in the code is `owned`, and what it says is "Mi colección".
 - Sentence-case in headings.
 - Bold sparingly.
 - No em-dashes. Use a colon, comma, semicolon, period, or rephrase.

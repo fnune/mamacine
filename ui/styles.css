@@ -512,14 +512,14 @@ button.link.bad { color: var(--bad); }
 .note.bad { border-left-color: var(--bad); }
 
 /* Settings: the folder and the language are hers; everything technical waits behind a fold */
-#screen-ajustes .inner { max-width: 640px; }
-#screen-ajustes label {
+#screen-settings .inner { max-width: 640px; }
+#screen-settings label {
   display: block;
   margin: 14px 0;
   color: var(--dim);
   font-size: 15px;
 }
-#screen-ajustes input {
+#screen-settings input {
   display: block;
   width: 100%;
   margin-top: 6px;
@@ -530,32 +530,32 @@ button.link.bad { color: var(--bad); }
   background: var(--panel);
   color: var(--text);
 }
-#screen-ajustes input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
-#screen-ajustes .pair { display: flex; gap: 16px; }
-#screen-ajustes .pair label { flex: 1; }
+#screen-settings input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+#screen-settings .pair { display: flex; gap: 16px; }
+#screen-settings .pair label { flex: 1; }
 
-#screen-ajustes .folder { display: flex; gap: 10px; align-items: stretch; margin-top: 6px; }
-#screen-ajustes .folder input { margin-top: 0; }
-#screen-ajustes .folder button { white-space: nowrap; }
+#screen-settings .folder { display: flex; gap: 10px; align-items: stretch; margin-top: 6px; }
+#screen-settings .folder input { margin-top: 0; }
+#screen-settings .folder button { white-space: nowrap; }
 
 /* closed, the summary's own padding is the whole box, so it sits centred; open, the container
    grows a floor and the first heading drops its section-break margin */
-#screen-ajustes .technical {
+#screen-settings .technical {
   margin-top: 30px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
   padding: 4px 16px;
   background: var(--panel);
 }
-#screen-ajustes .technical[open] { padding-bottom: 16px; }
-#screen-ajustes .technical summary {
+#screen-settings .technical[open] { padding-bottom: 16px; }
+#screen-settings .technical summary {
   cursor: pointer;
   padding: 12px 0;
   color: var(--dim);
   font-size: 16px;
 }
-#screen-ajustes .technical h2:first-of-type { margin-top: 10px; }
-#screen-ajustes .hint { color: var(--dim); font-size: 14px; margin: 0 0 12px; }
+#screen-settings .technical h2:first-of-type { margin-top: 10px; }
+#screen-settings .hint { color: var(--dim); font-size: 14px; margin: 0 0 12px; }
 .indexer {
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -563,10 +563,10 @@ button.link.bad { color: var(--bad); }
   margin-bottom: 12px;
   background: var(--bg);
 }
-#screen-ajustes .indexer label { margin: 8px 0; }
+#screen-settings .indexer label { margin: 8px 0; }
 .indexer-actions { display: flex; align-items: center; justify-content: space-between; margin-top: 10px; }
-#screen-ajustes .switch { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; color: var(--dim); font-size: 14px; }
-#screen-ajustes .switch input { width: auto; margin: 0; }
+#screen-settings .switch { display: flex; align-items: center; gap: 8px; margin: 14px 0 0; color: var(--dim); font-size: 14px; }
+#screen-settings .switch input { width: auto; margin: 0; }
 
 /* The shape of the answer while it is on its way */
 .film.waiting { pointer-events: none; }

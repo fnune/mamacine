@@ -3864,7 +3864,7 @@ mod tests {
     // The give-up screen used to be an instruction with no door. "Probar más copias" is the
     // door: the copies beyond the chase limit were kept, and the button spends them.
     #[test]
-    fn probar_mas_copias_continues_with_the_kept_copies_under_a_fresh_allowance() {
+    fn trying_more_copies_continues_with_the_kept_ones_under_a_fresh_allowance() {
         let releases: Vec<SearchResult> = (0..7)
             .map(|n| {
                 release(
