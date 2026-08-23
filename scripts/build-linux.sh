@@ -75,11 +75,11 @@ if [[ ! -x /usr/local/bin/appimagetool ]]; then
     chmod +x /usr/local/bin/appimagetool
 fi
 
-cargo install --locked tauri-cli --version "^2" || true
+cargo install --locked tauri-cli --version "=2.11.4" || true
 
 dist="/src/dist"
-rm -rf "$dist"
 mkdir -p "$dist"
+rm -f "$dist/MamaCine-x86_64.AppImage" "$dist/appdir-manifest.txt"
 
 # Tauri builds the AppDir and its own AppImage. The AppDir is what we want; the bundle it produces
 # is repacked below, because two things in it have to be corrected first.
@@ -123,5 +123,8 @@ appimagetool \
 } > "$dist/appdir-manifest.txt"
 
 cd "$dist"
-sha256sum MamaCine-x86_64.AppImage > checksums.txt
+checksum_all() {
+    find . -maxdepth 1 -type f ! -name checksums.txt -printf '%P\0' | sort -z | xargs -0 -r sha256sum
+}
+checksum_all > checksums.txt
 cat checksums.txt

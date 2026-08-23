@@ -180,6 +180,9 @@ header nav > button.on {
   font-weight: 700;
 }
 header nav button.gear { font-size: 20px; padding: 8px 12px; line-height: 1; }
+/* Going back is one button in one place, the masthead, for every screen that has a way out: a
+   row of the ficha spent on it pushed the poster and the title down on every detail screen. */
+header nav > button.back { padding-left: 14px; margin-right: 6px; }
 
 /* The download in progress, present on every screen, gone when there is none. It always names
    the film the download screen would headline, and counts the rest rather than summarising them. */
@@ -639,13 +642,11 @@ button.link.bad { color: var(--bad); }
 .story-fold summary { color: var(--dim); font-size: 14px; cursor: pointer; }
 .story { list-style: none; margin: 10px 0 0; padding: 14px 16px; border-radius: var(--radius);
          background: var(--panel); border: 1px solid var(--line); }
-.story li { display: flex; gap: 12px; padding: 5px 0; color: var(--dim); font-size: 15px; }
+.story li { display: flex; gap: 12px; padding: 1px 0; color: var(--dim); font-size: 15px;
+            line-height: 1.4; }
 .story li.now { color: var(--text); }
 .story .when { color: var(--dim); font-variant-numeric: tabular-nums; flex: none; }
 
-/* Going back is one button, in the same place on every detail screen. Its ground starts at the
-   content edge, in line with the poster and the mark above it. */
-.back { margin: 0 0 14px; padding: 8px 14px; border-radius: 10px; }
 .now .detail h1 { margin-top: 0; }
 
 /* The disk, drawn: what is taken, what this download would take, what is left */

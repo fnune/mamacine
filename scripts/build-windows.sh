@@ -57,7 +57,7 @@ rustup target add "$target"
 
 # already installed on a warm cache, so a failure here is not fatal
 cargo install --locked cargo-xwin --version "=0.22.0" || true
-cargo install --locked tauri-cli --version "^2" || true
+cargo install --locked tauri-cli --version "=2.11.4" || true
 
 # The programs the app drives have to travel with it: Windows has none of them.
 if [[ ! -d /src/src-tauri/binaries ]]; then
@@ -74,6 +74,21 @@ cargo tauri build \
     --bundles nsis \
     -- --locked
 
-echo
-echo "installer:"
-find "$CARGO_TARGET_DIR/$target/release/bundle" -name '*.exe' -print
+installer="$(find "$CARGO_TARGET_DIR/$target/release/bundle/nsis" -name '*-setup.exe' -print -quit)"
+if [[ -z $installer ]]; then
+    echo "the bundler left no installer behind" >&2
+    exit 1
+fi
+
+# Beside the AppImage rather than in the target directory, where it is easy to lose. The bundler's
+# own name carries the version, a space and an accent, none of which survive a download well.
+dist="/src/dist"
+mkdir -p "$dist"
+cp "$installer" "$dist/MamaCine-x64-setup.exe"
+
+cd "$dist"
+checksum_all() {
+    find . -maxdepth 1 -type f ! -name checksums.txt -printf '%P\0' | sort -z | xargs -0 -r sha256sum
+}
+checksum_all > checksums.txt
+cat checksums.txt

@@ -21,6 +21,10 @@ const SUGGESTIONS = [
 
 const pick = (list) => list[Math.floor(Math.random() * list.length)];
 
+// Where the way out leads, screen by screen. The button for it lives in the masthead, in one
+// place for every screen that has one, rather than spending a row of the ficha on itself.
+const BACK_TO = { detail: 'search', owned: 'library', episode: 'owned' };
+
 // She reads names, not ISO codes. An untagged track is "sin etiquetar", which is not a verdict.
 const LANGUAGE_NAMES = {
   spa: 'español', es: 'español', esp: 'español', cast: 'español',
@@ -332,7 +336,6 @@ function Detail({ state, actions }) {
   return html`
     <section class="screen split" id="screen-detail">
       <div class="scroll">
-        <button class="quiet back" onClick=${() => actions.show('search')}>← Volver</button>
         <div class="now">
           <${Poster} url=${item.cover_url} alt=${item.title || item.show} />
           <div class="detail">
@@ -388,8 +391,7 @@ function Detail({ state, actions }) {
                   </p>`}
                 ${chosen && html`
                   <p class="chosen" id="what-comes">
-                    Se descargará en ${midSentence(chosen.quality)},
-                    ${midSentence(chosen.language)}
+                    Se descargará en ${`${midSentence(chosen.quality)}, ${midSentence(chosen.language)}`}
                   </p>`}
               <//>`}
         </div>
@@ -585,7 +587,6 @@ function Owned({ state, actions }) {
   if (!film) {
     return html`
       <section class="screen" id="screen-owned">
-        <button class="quiet back" onClick=${() => actions.show('library')}>← Volver</button>
         <div class="empty" id="owned-gone">Esto ya no está en este ordenador.</div>
       </section>`;
   }
@@ -595,7 +596,6 @@ function Owned({ state, actions }) {
   return html`
     <section class="screen split" id="screen-owned">
       <div class="scroll">
-        <button class="quiet back" onClick=${() => actions.show('library')}>← Volver</button>
         <div class="now">
           <${Poster} url=${film.cover_url} alt=${film.title} />
           <div class="detail">
@@ -666,14 +666,12 @@ function EpisodeScreen({ state, actions }) {
   if (!film || !episode) {
     return html`
       <section class="screen" id="screen-episode">
-        <button class="quiet back" onClick=${() => actions.show('library')}>← Volver</button>
         <div class="empty" id="episode-gone">Ese episodio ya no está en la carpeta.</div>
       </section>`;
   }
   return html`
     <section class="screen split" id="screen-episode">
       <div class="scroll">
-        <button class="quiet back" onClick=${() => actions.show('owned')}>← Volver</button>
         <div class="now">
           <${Poster} url=${film.cover_url} alt=${film.title} />
           <div class="detail">
@@ -1314,6 +1312,9 @@ function App() {
         <span>Mamá Cine</span>
       </button>
       <nav>
+        ${BACK_TO[state.screen] && html`
+          <button class="back" onClick=${() => actions.show(BACK_TO[state.screen])}>
+            <span aria-hidden="true">←</span> Volver</button>`}
         ${[['search', 'Buscar'], ['library', 'Mi colección']].map(([screen, label]) => html`
           <button key=${screen} data-screen=${screen}
                   class=${state.screen === screen ? 'on' : ''}
