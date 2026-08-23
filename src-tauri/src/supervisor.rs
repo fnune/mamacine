@@ -102,6 +102,7 @@ impl Nzbget {
                 // the deadline to then blame the clock describes the wait, not the failure
                 Some(status) if !status.success() => {
                     log.line(&format!("nzbget refused to run ({status})"));
+                    report_own_log(&work, log);
                     return Err(Error::Setup(format!(
                         "El descargador se ha cerrado nada más arrancar. {IN_THE_LOG}"
                     )));
@@ -119,6 +120,7 @@ impl Nzbget {
             std::thread::sleep(Duration::from_millis(200));
         }
         log.line("nzbget was still not answering after 25 seconds");
+        report_own_log(&work, log);
         Err(Error::Setup(format!(
             "El descargador no ha arrancado. {IN_THE_LOG}"
         )))
@@ -145,6 +147,34 @@ impl Nzbget {
         }
         let _ = std::fs::remove_file(&self.pidfile);
     }
+}
+
+/// What nzbget wrote to its own log before it stopped, into ours.
+///
+/// A program that dies by abort() takes its unflushed output with it, and output to a pipe is
+/// buffered where output to a console is not: that is exactly the run whose reason is worth
+/// having, and piping it is what loses it. Its log file is written by nzbget itself, so it
+/// survives what the pipe does not.
+fn report_own_log(work: &std::path::Path, log: &Arc<Log>) {
+    let path = work.join("nzbget.log");
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        log.line(&format!(
+            "nzbget never wrote {}, so it stopped before it opened its own log",
+            path.display()
+        ));
+        return;
+    };
+    for line in last_lines(&text, 30) {
+        log.from("nzbget.log", line);
+    }
+}
+
+fn last_lines(text: &str, wanted: usize) -> Vec<&str> {
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    lines[lines.len().saturating_sub(wanted)..].to_vec()
 }
 
 /// nzbget's console output, into our log, on a thread of its own: a pipe nobody reads fills up
@@ -303,6 +333,18 @@ mod tests {
         assert!(!is_trouble(
             "Wed Aug 19 2026 00:20:50 INFO Download El Sur (1983) successful"
         ));
+    }
+
+    #[test]
+    fn the_end_of_its_log_is_what_says_why_it_stopped() {
+        let text = "one\ntwo\n\nthree\nfour\n";
+        assert_eq!(last_lines(text, 2), vec!["three", "four"]);
+        assert_eq!(
+            last_lines(text, 90),
+            vec!["one", "two", "three", "four"],
+            "a log shorter than the tail is the whole log, not a panic"
+        );
+        assert!(last_lines("", 10).is_empty());
     }
 
     #[test]

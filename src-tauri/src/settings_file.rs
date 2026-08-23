@@ -372,25 +372,65 @@ fn non_empty(value: &str, fallback: &str) -> String {
 
 /// On Windows these travel with the app; in development they come from the shell.
 pub fn tools(handle: &AppHandle) -> Tools {
-    let beside = |name: &str| {
-        handle
-            .path()
-            .resource_dir()
-            .map(|directory| directory.join(name))
+    let places: Vec<PathBuf> = [
+        handle.path().resource_dir().ok(),
+        std::env::current_exe()
             .ok()
-            .filter(|path| path.exists())
-            .unwrap_or_else(|| PathBuf::from(name))
-    };
+            .and_then(|exe| exe.parent().map(PathBuf::from)),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
     Tools {
-        nzbget: beside("nzbget"),
-        unrar: beside("unrar"),
-        sevenzip: beside("7za"),
+        nzbget: beside_the_app(&places, "nzbget"),
+        unrar: beside_the_app(&places, "unrar"),
+        sevenzip: beside_the_app(&places, "7za"),
     }
+}
+
+/// The name a bundled program is filed under is the name plus this platform's suffix, and looking
+/// for it without one found nothing on Windows: every tool fell back to a bare name, which only
+/// ever worked because Windows happens to search the folder the app is running from. What that
+/// hid is that a missing tool looked exactly like a present one.
+fn beside_the_app(places: &[PathBuf], name: &str) -> PathBuf {
+    let filename = format!("{name}{}", std::env::consts::EXE_SUFFIX);
+    places
+        .iter()
+        .map(|directory| directory.join(&filename))
+        .find(|path| path.exists())
+        // in development they come from the shell, and PATH is the right place to look
+        .unwrap_or_else(|| PathBuf::from(name))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_bundled_program_is_found_under_the_name_this_platform_files_it_as() {
+        let directory = std::env::temp_dir().join("mama-cine-tools-test");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let filename = format!("nzbget{}", std::env::consts::EXE_SUFFIX);
+        std::fs::write(directory.join(&filename), b"").expect("a program to find");
+
+        let places = vec![directory.clone()];
+        assert_eq!(
+            beside_the_app(&places, "nzbget"),
+            directory.join(&filename),
+            "the one that travels with the app wins over whatever is on the PATH"
+        );
+    }
+
+    #[test]
+    fn a_program_that_travels_with_nothing_is_left_to_the_path() {
+        let places = vec![std::env::temp_dir().join("mama-cine-nothing-here")];
+        assert_eq!(
+            beside_the_app(&places, "nzbget"),
+            PathBuf::from("nzbget"),
+            "development runs it from the shell"
+        );
+    }
 
     // The window's input fields produce strings, serde's as_u64 answers None for a string, and
     // for weeks editing the port silently did nothing. Every numeric field must take both.
