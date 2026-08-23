@@ -40,6 +40,7 @@ const SETTINGS = {
   destination: '/home/fausto/Descargas', language: 'any', tmdb_key: '',
   autostart: false, keep_running: true,
   settings_path: '/home/fausto/.config/mamacine/settings.json',
+  log_path: '/home/fausto/.local/share/mamacine/mamacine.log',
 };
 
 function start({
@@ -1163,6 +1164,11 @@ test('a downloader that stopped answering is said plainly on screen', async () =
 
   const banner = app.document.getElementById('problem');
   assert.match(banner.textContent, /descargador/);
+
+  // the banner is where a failed start leaves whoever is fixing it, so the log is offered there
+  click(app, app.document.getElementById('problem-log'));
+  await settle();
+  assert.ok(app.calls.some((call) => call.command === 'open_log_file'));
 });
 
 // A second download used to be a number on a badge and nothing else.
@@ -1318,6 +1324,37 @@ test('the settings file can be opened from the screen that writes it', async () 
   click(app, button);
   await settle();
   assert.ok(app.calls.some((call) => call.command === 'open_settings_file'));
+});
+
+// The one thing that was missing when the downloader would not start on her computer: the app
+// said "look at the log" and nothing on any screen said where that was or opened it.
+test('the log can be opened from the settings screen', async () => {
+  const app = start();
+  await openSettings(app);
+  const paths = [...app.document.querySelectorAll('#screen-settings .path')]
+    .map((element) => element.textContent);
+  assert.ok(paths.includes('/home/fausto/.local/share/mamacine/mamacine.log'),
+    'the screen names the log, so it can be found without the app');
+
+  const file = app.document.getElementById('open-log-file');
+  assert.ok(file.closest('#technical'), 'it is for whoever set the app up, not for her');
+  click(app, file);
+  await settle();
+  assert.ok(app.calls.some((call) => call.command === 'open_log_file'));
+
+  click(app, app.document.getElementById('open-log-folder'));
+  await settle();
+  assert.ok(app.calls.some((call) => call.command === 'open_log_folder'),
+    'the folder too: sending the log to someone means finding it, not reading it');
+});
+
+test('a log the computer refuses to open says so', async () => {
+  const app = start({ fail: 'open_log_file' });
+  await openSettings(app);
+  click(app, app.document.getElementById('open-log-file'));
+  await settle();
+  const notice = app.document.querySelector('#screen-settings .note.bad');
+  assert.ok(notice, 'the refusal is on the screen, not only in a console nobody opens');
 });
 
 test('a settings file the computer refuses to open says so', async () => {

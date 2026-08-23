@@ -1,13 +1,21 @@
 //! Starting and stopping the private nzbget instance that does the downloading.
 
+use crate::log::Log;
 use mamacine_core::error::{Error, Result};
 use mamacine_core::http::HttpClient;
 use mamacine_core::nzbget::{render_config, NzbgetRpc, Tools};
 use mamacine_core::settings::Settings;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::net::TcpListener;
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
+
+/// What she is told when the downloader will not run. The reason itself is technical every time,
+/// so it goes to the log, and the sentence says where the log is rather than pretending to
+/// explain: the person who can act on it is whoever set the app up.
+const IN_THE_LOG: &str = "En Ajustes, «Abrir el registro» dice por qué.";
 
 pub struct Nzbget {
     process: Option<Child>,
@@ -18,7 +26,12 @@ pub struct Nzbget {
 
 impl Nzbget {
     /// Writes a config only this instance uses, on a port only this instance knows.
-    pub fn start<H: HttpClient>(settings: &Settings, tools: &Tools, http: &H) -> Result<Nzbget> {
+    pub fn start<H: HttpClient>(
+        settings: &Settings,
+        tools: &Tools,
+        http: &H,
+        log: &Arc<Log>,
+    ) -> Result<Nzbget> {
         let work = settings.state.join("nzbget");
         for directory in ["inter", "nzb", "queue", "tmp", "scripts"] {
             std::fs::create_dir_all(work.join(directory))?;
@@ -38,22 +51,37 @@ impl Nzbget {
             render_config(settings, &work, port, &password, tools).as_bytes(),
         )?;
 
-        let process = Command::new(&tools.nzbget)
+        log.line(&format!(
+            "starting {} (exists: {}) with {} on port {port}",
+            tools.nzbget.display(),
+            tools.nzbget.exists(),
+            config_path.display()
+        ));
+
+        let mut process = Command::new(&tools.nzbget)
             .arg("-c")
             .arg(&config_path)
             .arg("-s")
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
             .spawn()
             .map_err(|failure| {
-                Error::Setup(format!(
+                log.line(&format!(
                     "nzbget could not be started ({}): {failure}",
                     tools.nzbget.display()
+                ));
+                Error::Setup(format!(
+                    "No he podido arrancar el descargador. {IN_THE_LOG}"
                 ))
             })?;
 
+        let ready = Arc::new(AtomicBool::new(false));
+        forward(process.stdout.take(), log, &ready);
+        forward(process.stderr.take(), log, &ready);
+
         let _ = std::fs::write(&pidfile, process.id().to_string());
-        let started = Nzbget {
+        let mut started = Nzbget {
             process: Some(process),
             pidfile,
             port,
@@ -62,15 +90,42 @@ impl Nzbget {
 
         let rpc = NzbgetRpc::new(started.port, &started.password, http);
         let deadline = Instant::now() + Duration::from_secs(25);
+        let mut ended = false;
         while Instant::now() < deadline {
             if rpc.is_ready() {
+                ready.store(true, Ordering::Relaxed);
+                log.line("nzbget is answering");
                 return Ok(started);
+            }
+            match started.ended() {
+                // an nzbget that refuses its own configuration is gone in a second: waiting out
+                // the deadline to then blame the clock describes the wait, not the failure
+                Some(status) if !status.success() => {
+                    log.line(&format!("nzbget refused to run ({status})"));
+                    return Err(Error::Setup(format!(
+                        "El descargador se ha cerrado nada más arrancar. {IN_THE_LOG}"
+                    )));
+                }
+                // leaving with nothing to complain about can mean it put a server behind it, so
+                // the answer is still worth waiting for
+                Some(status) if !ended => {
+                    ended = true;
+                    log.line(&format!(
+                        "the nzbget we launched ended ({status}); still waiting for an answer"
+                    ));
+                }
+                _ => {}
             }
             std::thread::sleep(Duration::from_millis(200));
         }
-        Err(Error::Setup(
-            "nzbget did not start in time. The log is in the application folder.".into(),
-        ))
+        log.line("nzbget was still not answering after 25 seconds");
+        Err(Error::Setup(format!(
+            "El descargador no ha arrancado. {IN_THE_LOG}"
+        )))
+    }
+
+    fn ended(&mut self) -> Option<std::process::ExitStatus> {
+        self.process.as_mut()?.try_wait().ok().flatten()
     }
 
     pub fn stop<H: HttpClient>(&mut self, http: &H) {
@@ -90,6 +145,39 @@ impl Nzbget {
         }
         let _ = std::fs::remove_file(&self.pidfile);
     }
+}
+
+/// nzbget's console output, into our log, on a thread of its own: a pipe nobody reads fills up
+/// and stops the program writing to it.
+///
+/// Everything it says until it answers, because that is where a refusal to start is printed and
+/// nowhere else: its own log file is not open yet. Only trouble after that, because it narrates
+/// every download, and a megabyte of narration would rotate away the app's own history to say
+/// what its log file already says.
+fn forward(
+    stream: Option<impl std::io::Read + Send + 'static>,
+    log: &Arc<Log>,
+    ready: &Arc<AtomicBool>,
+) {
+    let Some(stream) = stream else {
+        return;
+    };
+    let log = Arc::clone(log);
+    let ready = Arc::clone(ready);
+    std::thread::spawn(move || {
+        for line in std::io::BufReader::new(stream)
+            .lines()
+            .map_while(std::result::Result::ok)
+        {
+            if !ready.load(Ordering::Relaxed) || is_trouble(&line) {
+                log.from("nzbget", line.trim());
+            }
+        }
+    });
+}
+
+fn is_trouble(line: &str) -> bool {
+    line.contains("ERROR") || line.contains("WARNING") || line.contains("FATAL")
 }
 
 /// Kills the nzbget a crashed instance left behind, and only that: the pid is checked to still
@@ -200,6 +288,21 @@ mod tests {
 
         // still running, which is the point
         assert!(!pidfile.exists(), "the stale pidfile is cleaned up");
+    }
+
+    // nzbget narrates every download at INFO. Forwarding all of it into a log that rotates at a
+    // megabyte would push out the app's own history to duplicate what nzbget's log already has.
+    #[test]
+    fn only_what_went_wrong_is_kept_once_nzbget_is_running() {
+        assert!(is_trouble(
+            "Wed Aug 19 2026 00:20:50 ERROR Could not bind socket"
+        ));
+        assert!(is_trouble(
+            "Wed Aug 19 2026 00:20:50 WARNING Article download failed"
+        ));
+        assert!(!is_trouble(
+            "Wed Aug 19 2026 00:20:50 INFO Download El Sur (1983) successful"
+        ));
     }
 
     #[test]

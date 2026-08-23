@@ -130,8 +130,11 @@ window.__TAURI__ = {
                    news_connections: 8, news_encrypted: true, subtitles_agent: 'mamacine v1.0',
                    language: 'any', destination: 'C:\\Películas', autostart: false,
                    keep_running: true,
-                   settings_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\settings.json' };
+                   settings_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\settings.json',
+                   log_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\mamacine.log' };
         case 'open_settings_file':
+        case 'open_log_file':
+        case 'open_log_folder':
           return null;
         case 'save_settings':
           return { ...args.incoming, ready: true };

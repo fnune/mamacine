@@ -17,9 +17,30 @@ pub struct Log {
 impl Log {
     pub fn open(directory: &std::path::Path) -> Log {
         Log {
-            path: directory.join("mamacine.log"),
+            path: Log::path_in(directory),
             lock: Mutex::new(()),
         }
+    }
+
+    /// Nameable without opening it: the settings screen says where the log is on every draw, and
+    /// asking the running app for it would make that depend on the app having got that far.
+    pub fn path_in(directory: &std::path::Path) -> PathBuf {
+        directory.join("mamacine.log")
+    }
+
+    /// Where it writes, so a screen can name it and a button can open it.
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    pub fn folder(&self) -> &std::path::Path {
+        self.path.parent().unwrap_or(&self.path)
+    }
+
+    /// Every line of another program's output, one call per line, kept apart from ours by a
+    /// prefix: whoever reads the file has to be able to tell who said what.
+    pub fn from(&self, who: &str, text: &str) {
+        self.line(&format!("[{who}] {text}"));
     }
 
     /// Never fails outward: logging must not be able to break the thing it describes.

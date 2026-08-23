@@ -253,6 +253,7 @@ header nav > button.pill.on {
   border-bottom: 1px solid var(--line);
   font-size: 15px;
 }
+.problem .link { margin-left: 10px; vertical-align: middle; }
 
 /* --- screens ------------------------------------------------------------------------------- */
 
@@ -566,6 +567,7 @@ button.link.bad { color: var(--bad); }
   margin: 0 0 12px;
   overflow-wrap: anywhere;
 }
+.two-buttons { display: flex; flex-wrap: wrap; gap: 10px; }
 .indexer {
   border: 1px solid var(--line);
   border-radius: var(--radius);

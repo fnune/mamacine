@@ -336,12 +336,19 @@ pub struct SettingsView {
     ready: bool,
     /// Where all of this lives, so the screen can name the file it offers to open.
     settings_path: String,
+    /// The same, for the log: a failure that says "look at the log" has to say where it is.
+    log_path: String,
 }
 
 fn view_of(handle: &tauri::AppHandle, stored: &settings_file::StoredSettings) -> SettingsView {
     SettingsView {
         settings_path: settings_file::path(handle)
             .map(|path| path.display().to_string())
+            .unwrap_or_default(),
+        log_path: handle
+            .path()
+            .app_data_dir()
+            .map(|directory| Log::path_in(&directory).display().to_string())
             .unwrap_or_default(),
         ready: stored.indexers.iter().any(|indexer| {
             indexer.enabled && !indexer.key.trim().is_empty() && !indexer.url.trim().is_empty()
@@ -414,6 +421,24 @@ async fn open_settings_file(handle: tauri::AppHandle) -> Result<(), String> {
         open_with_desktop(&path.display().to_string())
     })
     .await
+}
+
+/// The log, and the folder it shares with nzbget's own log. Both are offered: reading it is one
+/// thing, and sending it to whoever can fix this is another, and that needs the folder.
+#[tauri::command]
+async fn open_log_file(app: State<'_, Arc<App>>) -> Result<(), String> {
+    let app = app.inner().clone();
+    off_thread(move || {
+        app.log.line("the log was opened from the settings screen");
+        open_with_desktop(&app.log.path().display().to_string())
+    })
+    .await
+}
+
+#[tauri::command]
+async fn open_log_folder(app: State<'_, Arc<App>>) -> Result<(), String> {
+    let app = app.inner().clone();
+    off_thread(move || open_with_desktop(&app.log.folder().display().to_string())).await
 }
 
 /// Writes the file and then rebuilds the running app on it, because settings that only take
@@ -592,6 +617,11 @@ fn open_with_desktop(path: &str) -> Result<(), String> {
         command
     };
     let mut child = command.spawn().map_err(|failure| failure.to_string())?;
+    // explorer.exe answers 1 whether or not it opened anything, so on Windows the only thing its
+    // code can produce is a false alarm on every successful open
+    if cfg!(target_os = "windows") {
+        return Ok(());
+    }
     for _ in 0..40 {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
@@ -703,8 +733,11 @@ fn build_runtime(handle: &tauri::AppHandle, app: &App) -> Result<Runtime, String
         .map_err(|failure| messages::explain(&failure_of(failure)).said)?;
     let tools = settings_file::tools(handle);
 
-    let nzbget = Nzbget::start(&settings, &tools, &app.network)
-        .map_err(|failure| messages::explain(&failure).said)?;
+    let nzbget = Nzbget::start(&settings, &tools, &app.network, &app.log).map_err(|failure| {
+        let explained = messages::explain(&failure);
+        app.log.line(&explained.why);
+        explained.said
+    })?;
     let downloader = NzbgetRpc::new(nzbget.port, &nzbget.password, Network::new());
     let indexers: Vec<(String, Box<dyn Indexer>)> = settings
         .indexers
@@ -840,6 +873,19 @@ pub fn run() {
             let state = handle.path().app_data_dir()?;
             std::fs::create_dir_all(&state)?;
             let log = Arc::new(Log::open(&state));
+            log.line(&format!(
+                "Mamá Cine {} starting, its files in {}",
+                tauri_app.package_info().version,
+                state.display()
+            ));
+            // a panic on a worker thread went to a stderr that a Windows app does not have, so
+            // the app simply stopped doing something and the reason was nowhere
+            let panics = Arc::clone(&log);
+            let previously = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |panic| {
+                panics.line(&format!("panic: {panic}"));
+                previously(panic);
+            }));
             let library = Arc::new(Library::open(&state, Arc::clone(&log)));
             let app = Arc::new(App {
                 runtime: RwLock::new(None),
@@ -964,6 +1010,8 @@ pub fn run() {
             choose_folder,
             read_settings,
             open_settings_file,
+            open_log_file,
+            open_log_folder,
             save_settings,
             check_settings
         ])

@@ -254,9 +254,14 @@ function Notice({ notice }) {
 
 // The downloader stopped answering, or never started: said calmly, on every screen, because a
 // frozen screen that says nothing was one of the ways this app used to lie.
-function Problem({ problem }) {
+function Problem({ problem, actions }) {
   if (!problem) return null;
-  return html`<div id="problem" class="problem">${problem}</div>`;
+  return html`<div id="problem" class="problem">
+    ${problem}
+    <button type="button" class="link" id="problem-log" onClick=${actions.openLogFile}>
+      Abrir el registro
+    </button>
+  </div>`;
 }
 
 // --- the screens -------------------------------------------------------------
@@ -830,6 +835,21 @@ function Settings({ state, actions }) {
                 onClick=${actions.openSettingsFile}>
           Abrir el archivo de ajustes
         </button>
+
+        <h2>El registro</h2>
+        <p class="hint">Lo que ha ido pasando por dentro, y lo que dice el descargador cuando no
+          arranca. Es lo primero que hay que mirar cuando algo falla, y lo que hay que enviar a
+          quien pueda arreglarlo.</p>
+        <p class="path">${settings.log_path}</p>
+        <div class="two-buttons">
+          <button type="button" class="quiet" id="open-log-file" onClick=${actions.openLogFile}>
+            Abrir el registro
+          </button>
+          <button type="button" class="quiet" id="open-log-folder"
+                  onClick=${actions.openLogFolder}>
+            Abrir la carpeta
+          </button>
+        </div>
       </details>
 
       <div class="actions">
@@ -1285,6 +1305,25 @@ function App() {
       }
     },
 
+    // reachable from the problem banner as well as from the settings screen, so the notice goes
+    // where she is looking: the settings screen is not where a failed start leaves her
+    openLogFile: async () => {
+      try {
+        await invoke('open_log_file');
+      } catch (error) {
+        change({ notice: { text: String(error), bad: true },
+                 settingsNotice: { text: String(error), bad: true } });
+      }
+    },
+
+    openLogFolder: async () => {
+      try {
+        await invoke('open_log_folder');
+      } catch (error) {
+        change({ settingsNotice: { text: String(error), bad: true } });
+      }
+    },
+
     saveSettings: async () => {
       change({ settingsNotice: { text: 'Guardando…' } });
       try {
@@ -1358,7 +1397,7 @@ function App() {
       Queda poco sitio en el disco: solo ${state.progress.free_space} libres.
       Borra alguna película que ya hayas visto.
     </div>`}
-    <${Problem} problem=${state.problem} />
+    <${Problem} problem=${state.problem} actions=${actions} />
     <main>
       <${Screen} state=${state} actions=${actions} />
     </main>`;
