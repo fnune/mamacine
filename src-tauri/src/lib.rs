@@ -334,10 +334,15 @@ pub struct SettingsView {
     autostart: bool,
     keep_running: bool,
     ready: bool,
+    /// Where all of this lives, so the screen can name the file it offers to open.
+    settings_path: String,
 }
 
-fn view_of(stored: &settings_file::StoredSettings) -> SettingsView {
+fn view_of(handle: &tauri::AppHandle, stored: &settings_file::StoredSettings) -> SettingsView {
     SettingsView {
+        settings_path: settings_file::path(handle)
+            .map(|path| path.display().to_string())
+            .unwrap_or_default(),
         ready: stored.indexers.iter().any(|indexer| {
             indexer.enabled && !indexer.key.trim().is_empty() && !indexer.url.trim().is_empty()
         }) && !stored.news_host.trim().is_empty(),
@@ -391,7 +396,24 @@ async fn choose_folder(handle: tauri::AppHandle) -> Option<String> {
 
 #[tauri::command]
 fn read_settings(handle: tauri::AppHandle) -> SettingsView {
-    view_of(&settings_file::read(&handle))
+    let stored = settings_file::read(&handle);
+    view_of(&handle, &stored)
+}
+
+/// Opens the settings file itself, for the one person who will ever want it: whoever set the app
+/// up for her. Written out first when it is not there yet, because the first run has nothing on
+/// disk and "no pasa nada" is the worst answer a button can give.
+#[tauri::command]
+async fn open_settings_file(handle: tauri::AppHandle) -> Result<(), String> {
+    off_thread(move || {
+        let path = settings_file::path(&handle).map_err(|failure| failure.to_string())?;
+        if !path.exists() {
+            let stored = settings_file::read(&handle);
+            settings_file::write(&handle, &stored).map_err(|failure| failure.to_string())?;
+        }
+        open_with_desktop(&path.display().to_string())
+    })
+    .await
 }
 
 /// Writes the file and then rebuilds the running app on it, because settings that only take
@@ -417,7 +439,7 @@ async fn save_settings(
                 return Err(format!("Se ha guardado, pero hay un problema: {problem}"));
             }
         }
-        Ok(view_of(&stored))
+        Ok(view_of(&handle, &stored))
     })
     .await
 }
@@ -941,6 +963,7 @@ pub fn run() {
             open_imdb,
             choose_folder,
             read_settings,
+            open_settings_file,
             save_settings,
             check_settings
         ])

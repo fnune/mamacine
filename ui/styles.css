@@ -559,6 +559,13 @@ button.link.bad { color: var(--bad); }
 }
 #screen-settings .technical h2:first-of-type { margin-top: 10px; }
 #screen-settings .hint { color: var(--dim); font-size: 14px; margin: 0 0 12px; }
+#screen-settings .path {
+  color: var(--dim);
+  font-family: monospace;
+  font-size: 13px;
+  margin: 0 0 12px;
+  overflow-wrap: anywhere;
+}
 .indexer {
   border: 1px solid var(--line);
   border-radius: var(--radius);

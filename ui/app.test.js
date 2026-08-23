@@ -39,6 +39,7 @@ const SETTINGS = {
   subtitles_agent: 'mamacine v1.0', subtitles_user: 'fnune', subtitles_password_set: true,
   destination: '/home/fausto/Descargas', language: 'any', tmdb_key: '',
   autostart: false, keep_running: true,
+  settings_path: '/home/fausto/.config/mamacine/settings.json',
 };
 
 function start({
@@ -1266,6 +1267,67 @@ test('a stored password is never sent back to the screen', async () => {
   const password = app.document.querySelector('#screen-settings input[name="news_password"]');
   assert.equal(password.value, '');
   assert.equal(password.getAttribute('placeholder'), 'sin cambios');
+});
+
+// Blanking the box as it was drawn was what kept the password out of it, and the redraw after
+// every letter put the blank back: typing "secreto" left one letter behind, and that letter was
+// what got saved.
+test('a password can be typed into, letter by letter', async () => {
+  const app = start();
+  await openSettings(app);
+  const field = app.document.querySelector('#screen-settings input[name="news_password"]');
+  for (const letter of 'secreto') {
+    type(app, field, field.value + letter);
+    await settle();
+  }
+  assert.equal(
+    app.document.querySelector('#screen-settings input[name="news_password"]').value,
+    'secreto',
+    'every letter stayed where she put it',
+  );
+
+  press(app, '#screen-settings .actions button', 'Guardar');
+  await settle();
+  await settle();
+  const sent = app.calls.find((call) => call.command === 'save_settings').args.incoming;
+  assert.equal(sent.news_password, 'secreto');
+});
+
+test('a saved password is not left on the screen afterwards', async () => {
+  const app = start();
+  await openSettings(app);
+  type(app, app.document.querySelector('#screen-settings input[name="subtitles_password"]'), 'x');
+  await settle();
+  press(app, '#screen-settings .actions button', 'Guardar');
+  await settle();
+  await settle();
+  assert.equal(
+    app.document.querySelector('#screen-settings input[name="subtitles_password"]').value,
+    '',
+    'the answer to the save carries no password back to the window',
+  );
+});
+
+test('the settings file can be opened from the screen that writes it', async () => {
+  const app = start();
+  await openSettings(app);
+  const path = app.document.querySelector('#screen-settings .path');
+  assert.equal(path.textContent, '/home/fausto/.config/mamacine/settings.json');
+  const button = app.document.getElementById('open-settings-file');
+  assert.ok(button.closest('#technical'), 'she has no business here; it is for whoever set it up');
+  click(app, button);
+  await settle();
+  assert.ok(app.calls.some((call) => call.command === 'open_settings_file'));
+});
+
+test('a settings file the computer refuses to open says so', async () => {
+  const app = start({ fail: 'open_settings_file' });
+  await openSettings(app);
+  click(app, app.document.getElementById('open-settings-file'));
+  await settle();
+  const notice = app.document.querySelector('#screen-settings .note.bad');
+  assert.ok(notice, 'the refusal is on the screen, not only in a console nobody opens');
+  assert.match(notice.textContent, /no responde/);
 });
 
 test('where films are saved is chosen, never typed', async () => {

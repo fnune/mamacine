@@ -705,9 +705,17 @@ function EpisodeScreen({ state, actions }) {
 }
 
 // Passwords the backend answers about rather than with: it sends news_password_set, and the field
-// says "sin cambios" instead of showing anything. Blanked here as well, so a backend that ever
-// answered with one would still not put it back on a screen.
+// says "sin cambios" instead of showing anything. Dropped from whatever the backend sends, so a
+// backend that ever answered with one would still not put it back on a screen. Dropped on the way
+// in and not on every redraw: blanking the box as it was drawn threw away each letter as she typed
+// it, and what got saved was the last one.
 const WITHHELD = ['news_password', 'subtitles_password'];
+
+const withoutPasswords = (settings) => {
+  const kept = { ...settings };
+  for (const name of WITHHELD) delete kept[name];
+  return kept;
+};
 
 function Settings({ state, actions }) {
   const settings = state.settings;
@@ -715,7 +723,7 @@ function Settings({ state, actions }) {
 
   const field = (name, label, extra = {}) => html`
     <label>${label}
-      <input name=${name} value=${WITHHELD.includes(name) ? '' : settings[name] ?? ''}
+      <input name=${name} value=${settings[name] ?? ''}
              autocomplete="off" ...${extra}
              onInput=${(event) => actions.setSetting(name, event.target.value)} /></label>`;
 
@@ -813,6 +821,15 @@ function Settings({ state, actions }) {
         ${field('subtitles_agent', 'Nombre de la aplicación registrada')}
         ${field('subtitles_user', 'Usuario', { placeholder: 'el nombre de usuario, no el correo' })}
         ${field('subtitles_password', 'Contraseña', { type: 'password', placeholder: 'sin cambios' })}
+
+        <h2>El archivo de ajustes</h2>
+        <p class="hint">Todo esto se guarda aquí. Abrirlo sirve para mirarlo o para copiarlo a otro
+          ordenador; después de cambiarlo a mano hay que reiniciar Mamá Cine.</p>
+        <p class="path">${settings.settings_path}</p>
+        <button type="button" class="quiet" id="open-settings-file"
+                onClick=${actions.openSettingsFile}>
+          Abrir el archivo de ajustes
+        </button>
       </details>
 
       <div class="actions">
@@ -895,7 +912,7 @@ function App() {
   useEffect(() => {
     invoke('read_settings')
       .then((settings) => change({
-        settings,
+        settings: withoutPasswords(settings),
         screen: settings.ready ? 'search' : 'settings',
       }))
       .catch(() => {});
@@ -1260,12 +1277,20 @@ function App() {
       if (chosen) actions.setSetting('destination', chosen);
     },
 
+    openSettingsFile: async () => {
+      try {
+        await invoke('open_settings_file');
+      } catch (error) {
+        change({ settingsNotice: { text: String(error), bad: true } });
+      }
+    },
+
     saveSettings: async () => {
       change({ settingsNotice: { text: 'Guardando…' } });
       try {
         const saved = await invoke('save_settings', { incoming: latest.current.settings });
         change({
-          settings: saved,
+          settings: withoutPasswords(saved),
           settingsNotice: {
             text: saved.ready
               ? 'Guardado. Ya puedes buscar películas.'
