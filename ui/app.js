@@ -34,6 +34,10 @@ const LANGUAGE_NAMES = {
 };
 
 const named = (codes) => [...new Set(codes.map((code) => LANGUAGE_NAMES[code] || code))];
+
+// The quality and the language head a chip of their own, so they arrive capitalised. Spanish
+// does not capitalise mid-sentence.
+const midSentence = (text) => (text ? text[0].toLowerCase() + text.slice(1) : text);
 const SPANISH = ['spa', 'es', 'esp', 'cast', 'spanish'];
 const inSpanish = (code) => SPANISH.includes(code);
 
@@ -41,7 +45,7 @@ const STATUS_WORDS = {
   starting: 'Empezando la descarga…',
   downloading: 'Descargando',
   verifying: 'Comprobando que está completa…',
-  repairing: 'Arreglando lo que falta…',
+  repairing: 'Recuperando lo que falta…',
   unpacking: 'Casi lista…',
   moving: 'Guardando…',
   finishing: 'Últimos detalles…',
@@ -49,10 +53,10 @@ const STATUS_WORDS = {
   paused: 'En pausa',
   // retrying while the server is down is not searching, it is waiting, and saying so is what
   // makes the banner above it make sense
-  waiting: 'Esperando a que el servidor vuelva…',
+  waiting: 'Esperando a que vuelva el servidor…',
   // finding a broken copy and starting another is the ordinary course of this, not an incident:
   // it is one line of the story below, and the headline stays on the thing she is waiting for
-  retrying: 'Buscando otra versión…',
+  retrying: 'Buscando otra copia…',
   done: 'Lista para ver',
   failed: 'No he podido conseguirla',
 };
@@ -113,8 +117,8 @@ function spokenIn(film) {
 // will take. A verdict like "hay sitio de sobra" hid every one of those numbers.
 function timeWords(minutes) {
   if (!minutes) return '';
-  return `tardará alrededor de ${minutes > 90
-    ? `${Math.round(minutes / 60)} horas` : `${minutes} minutos`}`;
+  return `tardará ${minutes > 90
+    ? `unas ${Math.round(minutes / 60)} horas` : `unos ${minutes} minutos`}`;
 }
 
 // Under 40 GB, a film plus its unpacking scratch space stops fitting comfortably.
@@ -301,9 +305,9 @@ function Search({ state, actions }) {
                   cover=${item.cover_url}
                   lines=${[series ? item.label : item.year]}
                   onOpen=${() => actions.openDetail(item, series)} />`)
-            : state.searched && html`<div class="empty">
+            : state.searched && state.suggestions.length === 0 && html`<div class="empty">
                 ${state.searchedExact
-                  ? 'Existe, pero ahora mismo no está en los sitios donde busco. Puede que aparezca más adelante.'
+                  ? 'Existe, pero ahora mismo no la encuentro en los sitios donde busco. Puede que aparezca más adelante.'
                   : 'No hay nada con ese nombre. Escríbelo otra vez y elige uno de los títulos que aparecen.'}
               </div>`}
       </div>
@@ -340,8 +344,8 @@ function Detail({ state, actions }) {
             ${series && !have && html`<p class="factline">
               ${episodes.length > 0
                 ? `Son ${episodes.length} episodios.`
-                : 'Son varios episodios.'} Cuando termine, se eligen desde la aplicación, uno a
-              uno.</p>`}
+                : 'Son varios episodios.'} Cuando termine la descarga, podrás verlos aquí,
+              uno a uno.</p>`}
             ${named.length > 0 && html`
               <ol class="episode-names" id="episode-names">
                 ${named.map((episode) => html`
@@ -380,11 +384,12 @@ function Detail({ state, actions }) {
                 ${chosen && chosen.room !== 'fits' && html`
                   <p class="room bad" id="room-warning">
                     ${chosen.room === 'no' ? 'No hay sitio suficiente' : 'Puede que no quepa'}:
-                    mientras se descarga y se prepara necesita unos ${chosen.needs}.
+                    mientras se descarga y se prepara, necesita unos ${chosen.needs}.
                   </p>`}
                 ${chosen && html`
                   <p class="chosen" id="what-comes">
-                    Se descargará en ${chosen.quality}, ${chosen.language}
+                    Se descargará en ${midSentence(chosen.quality)},
+                    ${midSentence(chosen.language)}
                   </p>`}
               <//>`}
         </div>
@@ -459,7 +464,9 @@ function Now({ state, actions }) {
       <div class="scroll">
         ${others.length > 0 && html`
           <div class="also" id="also-downloading">
-            <span>También descargando:</span>
+            <span>${others.length === 1
+              ? 'También se está descargando:'
+              : 'También se están descargando:'}</span>
             ${others.map((other) => html`
               <button class="quiet" key=${other.id} onClick=${() => actions.watch(other)}>
                 ${other.title}
@@ -483,7 +490,7 @@ function Now({ state, actions }) {
         <p class="beneath">${paused && state.progress.free_bytes > 0
           && state.progress.free_bytes < 20 * 1024 ** 3
           ? `El disco está casi lleno: quedan ${state.progress.free_space} libres. `
-            + 'Quita alguna película que ya hayas visto.'
+            + 'Borra alguna película que ya hayas visto.'
           : beneath}</p>
 
         <div class="actions">
@@ -640,11 +647,11 @@ function Owned({ state, actions }) {
           ${state.confirmRemove === film.id
             ? html`<span class="confirm">
                 <span class="word">¿Seguro?</span>
-                <button class="quiet bad" onClick=${() => actions.remove(film)}>Sí, quitar</button>
+                <button class="quiet bad" onClick=${() => actions.remove(film)}>Sí, borrar</button>
                 <button class="quiet" onClick=${() => actions.confirmRemove(null)}>No</button>
               </span>`
             : html`<button class="quiet" id="remove"
-                           onClick=${() => actions.confirmRemove(film.id)}>Quitar</button>`}
+                           onClick=${() => actions.confirmRemove(film.id)}>Borrar</button>`}
         </div>
       </div>
     </section>`;
@@ -741,21 +748,21 @@ function Settings({ state, actions }) {
       <label class="switch">
         <input type="checkbox" name="autostart" checked=${settings.autostart === true}
                onChange=${(event) => actions.setSetting('autostart', event.target.checked)} />
-        Abrir Mamá Cine sola al encender el ordenador
+        Abrir Mamá Cine al encender el ordenador
       </label>
       <label class="switch">
         <input type="checkbox" name="keep_running" checked=${settings.keep_running !== false}
                onChange=${(event) => actions.setSetting('keep_running', event.target.checked)} />
         Al cerrar la ventana, seguir con las descargas
       </label>
-      <p class="hint">La aplicación se queda en un icono pequeño junto al reloj, y avisa cuando
-        una película está lista.</p>
+      <p class="hint">La aplicación se queda como un icono pequeño junto al reloj y avisa
+        cuando una película está lista.</p>
 
       <details class="technical" id="technical">
         <summary>Ajustes técnicos</summary>
 
         <h2>Dónde buscar</h2>
-        <p class="hint">Puedes añadir varios. Cuantos más, más cosas encuentra.</p>
+        <p class="hint">Puedes añadir varios: cuantos más, más películas encontrarás.</p>
         <div id="indexers">
           ${(settings.indexers || []).map((indexer, position) => html`
             <div class="indexer" key=${position}>
@@ -1003,10 +1010,11 @@ function App() {
       const title = latest.current.suggestions[position];
       if (!title) return;
       actions.hideSuggestions();
+      // her language and nothing else: the original beside it helped her choose between two rows
+      // and would only make the box hold something she could never have typed
       change({ query: title.title, searching: true });
       try {
         const picked = await invoke('pick_suggestion', { index: position });
-        change({ query: picked.title });
         await actions.runSearch(picked.query, picked.series ? 'series' : 'film', picked.title);
       } catch (error) {
         // the resolver failing must not dead-end her: her words still make a search
@@ -1031,9 +1039,10 @@ function App() {
           films: found.films,
           seasons: found.seasons,
           searched: true,
-          // she picked a real title from the suggestions: an empty answer means the sites do not
-          // carry it, and telling her to check her spelling would blame her for that
-          searchedExact: Boolean(kind),
+          // the search knew which title she meant, whether she picked it or typed its name: an
+          // empty answer means the sites do not carry it, and telling her to check her spelling
+          // would blame her for that
+          searchedExact: Boolean(found.exact),
           notice: found.notice ? { text: found.notice } : null,
         });
       } catch (error) {
@@ -1201,7 +1210,7 @@ function App() {
           screen: 'library',
           ownedId: null,
           shelfNotice: {
-            text: `${film.title} se ha enviado a la papelera. Desde allí todavía se puede recuperar.`,
+            text: `He enviado ${film.title} a la papelera. Desde ahí todavía la puedes recuperar.`,
           },
         });
       } catch (error) {
@@ -1261,8 +1270,8 @@ function App() {
           settings: saved,
           settingsNotice: {
             text: saved.ready
-              ? 'Guardado. Ya se puede buscar películas.'
-              : 'Guardado, pero todavía faltan un buscador o el servidor de descargas.',
+              ? 'Guardado. Ya puedes buscar películas.'
+              : 'Guardado, pero todavía falta un buscador o el servidor de descargas.',
           },
         });
       } catch (error) {
@@ -1320,8 +1329,8 @@ function App() {
       </nav>
     </header>
     ${lowOnSpace(state.progress) && html`<div id="space" class="space">
-      Queda poco sitio: quedan ${state.progress.free_space} libres.
-      Quita alguna película que ya hayas visto.
+      Queda poco sitio en el disco: solo ${state.progress.free_space} libres.
+      Borra alguna película que ya hayas visto.
     </div>`}
     <${Problem} problem=${state.problem} />
     <main>

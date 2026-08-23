@@ -12,8 +12,10 @@ pub struct Suggestion {
     pub id: String,
     /// In her language when the provider knows it, else however the provider names it.
     pub title: String,
-    /// The original title, only when the provider states it outright and it actually differs.
-    /// Guessing at originals would put wrong names in parentheses, so absent means unknown.
+    /// The original title, shown in parentheses beside the other one so two titles of the same
+    /// name can be told apart. Only when the provider states it outright, because guessing at
+    /// originals would put wrong names on the screen, and only when she could read it: "El
+    /// castillo ambulante (ハウルの動く城)" tells her nothing the poster and the year do not.
     pub original: Option<String>,
     pub year: Option<String>,
     pub series: bool,
@@ -33,12 +35,11 @@ pub struct Picked {
     pub show: ShowIds,
 }
 
-/// The localized name first, the original beside it, exactly when both are known.
-pub fn shown_title(title: &str, original: Option<&str>) -> String {
-    match original {
-        Some(original) => format!("{title} ({original})"),
-        None => title.to_string(),
-    }
+/// A name she has a chance of reading, and so a name worth putting beside another one. Latin
+/// script survives folding into ASCII; Japanese, Korean and Cyrillic do not.
+pub fn readable(text: &str) -> bool {
+    let folded = crate::search::fold(text);
+    folded.is_ascii() && folded.chars().any(|letter| letter.is_ascii_alphanumeric())
 }
 
 pub struct Lookup<H> {
@@ -238,11 +239,16 @@ mod tests {
         for suggestion in parse_suggestions(&answer()) {
             assert_eq!(suggestion.original, None);
         }
-        assert_eq!(
-            shown_title("El hoyo", Some("The Platform")),
-            "El hoyo (The Platform)"
-        );
-        assert_eq!(shown_title("Coco", None), "Coco");
+    }
+
+    #[test]
+    fn a_name_is_worth_showing_only_where_she_could_read_it() {
+        assert!(readable("The Platform"));
+        assert!(readable("Le fabuleux destin d'Amélie Poulain"));
+        assert!(!readable("ハウルの動く城"), "she reads no Japanese");
+        assert!(!readable("기생충"));
+        assert!(!readable("Игра престолов"));
+        assert!(!readable("   "), "no name at all is not a name");
     }
 
     #[test]

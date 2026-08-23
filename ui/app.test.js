@@ -46,7 +46,7 @@ function start({
   have = null, downloading = null, grabbed = { id: 7, already: false }, settings = SETTINGS,
   fail = null, holdSuggest = false,
   versions = VERSIONS, suggestions = [], free_bytes = 442_000_000_000, free_space = '412 GB',
-  problem = null, searchNotice = null, synopsis = '', seasonEpisodes = [],
+  problem = null, searchNotice = null, searchExact = null, synopsis = '', seasonEpisodes = [],
   episodeRows = [
     { label: 'Episodio 1', subtitles: true },
     { label: 'Episodio 2', subtitles: true },
@@ -61,7 +61,11 @@ function start({
     calls.push({ command, args });
     if (fail && fail === command) throw new Error('el buscador no responde');
     switch (command) {
-      case 'search': return { films, seasons, notice: searchNotice };
+      case 'search':
+        // the backend says whether it knew which title she meant, by a pick or by a name
+        // it identified; the fake only knows about the pick
+        return { films, seasons, notice: searchNotice,
+                 exact: searchExact ?? Boolean(args.kind) };
       case 'suggest':
         if (holdSuggest) {
           return new Promise((resolve) => { releaseSuggest = () => resolve(suggestions); });
@@ -350,6 +354,54 @@ test('a series suggestion searches by its proper name', async () => {
     'she said it is a series, so films are not even asked for');
 });
 
+// Typing the name and pressing Buscar is the same act as tapping the row, so it earns the same
+// answer: a title the search identified is not a title she misspelled.
+test('an empty answer to a name that was identified never blames her spelling', async () => {
+  const app = start({ films: [], seasons: [], searchExact: true });
+  await searchFor(app, 'el castillo ambulante');
+  assert.match(app.document.querySelector('#results .empty').textContent,
+    /Existe, pero ahora mismo no la encuentro/);
+});
+
+// The box must hold something she could have typed. "El castillo ambulante (ハウルの動く城)" is a
+// label for choosing between rows, and putting it in the box makes the app look like it searched
+// for that, which it never did.
+test('picking a title leaves her own language in the box', async () => {
+  const suggestions = [
+    { id: '0347149', title: 'El castillo ambulante', original: null, year: '2004', series: false,
+      poster_url: null },
+  ];
+  const app = start({ suggestions, films: [], seasons: [] });
+  await settle();
+  const field = app.document.getElementById('query');
+  field.value = 'el castillo';
+  field.dispatchEvent(new app.window.Event('input', { bubbles: true }));
+  await settle();
+  await settle();
+  click(app, app.document.querySelector('.suggestion'));
+  await settle();
+  await settle();
+  assert.equal(app.document.getElementById('query').value, 'El castillo ambulante');
+});
+
+// Saying "no hay nada con ese nombre" underneath a list that is showing that very name reads as
+// the app arguing with itself.
+test('nothing is called missing while the suggestions are showing it', async () => {
+  const suggestions = [
+    { id: '0347149', title: 'El castillo ambulante', original: null, year: '2004', series: false,
+      poster_url: null },
+  ];
+  const app = start({ suggestions, films: [], seasons: [] });
+  await searchFor(app, 'el castillo ambulante');
+  app.document.getElementById('query').dispatchEvent(
+    new app.window.Event('input', { bubbles: true }),
+  );
+  await settle();
+  await settle();
+  assert.ok(app.document.querySelector('#suggestions'), 'the list is up');
+  assert.equal(app.document.querySelector('#results .empty'), null);
+});
+
 // "Cuéntame cómo pasó" exists and NZBGeek simply does not carry it. Telling her to check her
 // spelling, about a title she picked from a list, blames her for the indexer's catalogue.
 test('an empty answer to a picked title never blames her spelling', async () => {
@@ -369,7 +421,7 @@ test('an empty answer to a picked title never blames her spelling', async () => 
   await settle();
 
   const empty = app.document.querySelector('#results .empty');
-  assert.match(empty.textContent, /Existe, pero ahora mismo no está/);
+  assert.match(empty.textContent, /Existe, pero ahora mismo no la encuentro/);
   assert.ok(!/escribirlo de otra manera/.test(empty.textContent), 'her spelling was fine');
 
   // a typed search that finds nothing points at the path that works: the suggestions
@@ -422,7 +474,7 @@ test('a fresh window adopts a film that is mid-chase instead of claiming idlenes
 
   assert.ok(!app.document.getElementById('now-empty'), 'not idle');
   assert.equal(app.document.getElementById('now-title').textContent, 'El Sur');
-  assert.match(app.document.getElementById('now-status').textContent, /Buscando otra versión/);
+  assert.match(app.document.getElementById('now-status').textContent, /Buscando otra copia/);
 });
 
 test('a film already on its way is shown as such, never offered again', async () => {
@@ -704,13 +756,13 @@ test('a film can be removed from its page, with one chance to change her mind', 
   assert.match(app.document.getElementById('screen-owned').textContent, /¿Seguro?/);
 
   const confirm = [...app.document.querySelectorAll('#screen-owned button')]
-    .find((button) => button.textContent.includes('Sí, quitar'));
+    .find((button) => button.textContent.includes('Sí, borrar'));
   click(app, confirm);
   await settle();
   assert.equal(app.calls.find((call) => call.command === 'remove_film').args.id, 42);
   assert.ok(app.document.getElementById('screen-library'), 'and she lands back among her films');
   assert.match(app.document.getElementById('screen-library').textContent, /papelera/);
-  assert.match(app.document.getElementById('screen-library').textContent, /se puede recuperar/,
+  assert.match(app.document.getElementById('screen-library').textContent, /todavía la puedes recuperar/,
     'recoverable is a fact she should have');
 });
 
@@ -728,7 +780,7 @@ test('the page says which subtitles are there, and offers to look again', async 
   assert.ok(state.classList.contains('ok'), 'said as a state, not as a warning');
 
   const missing = start({ shelf: [
-    { id: 42, title: 'El Sur', subtitle_note: 'No hay subtítulos en español para esta versión',
+    { id: 42, title: 'El Sur', subtitle_note: 'No hay subtítulos en español para esta copia',
       cover_url: null, year: '1983', languages: {}, series: false },
   ] });
   await settle();
@@ -852,7 +904,7 @@ test('a disk getting tight becomes a banner naming the way out', async () => {
   const banner = tight.document.getElementById('space');
   assert.match(banner.textContent, /Queda poco sitio/);
   assert.match(banner.textContent, /15 GB libres/);
-  assert.match(banner.textContent, /Quita alguna película/, 'the action is named beside it');
+  assert.match(banner.textContent, /Borra alguna película/, 'the action is named beside it');
   click(tight, tight.document.querySelector('nav button[data-screen="library"]'));
   await settle();
   assert.ok(tight.document.querySelector('#shelf-disk .meter.low'),
@@ -953,7 +1005,7 @@ test('a failure the app has not answered yet reads as searching, not as the end'
   await app.poll();
 
   const status = app.document.getElementById('now-status').textContent;
-  assert.match(status, /Buscando otra versión/, status);
+  assert.match(status, /Buscando otra copia/, status);
   assert.ok(!/No he podido/.test(status), 'the flash of false failure is the old bug');
 });
 
@@ -987,7 +1039,7 @@ test('a dead copy empties the bar once, as the words change', async () => {
   await settle();
   await dead.poll();
 
-  assert.match(dead.document.getElementById('now-status').textContent, /Buscando otra versión/);
+  assert.match(dead.document.getElementById('now-status').textContent, /Buscando otra copia/);
   assert.match(dead.document.querySelector('.bar i').getAttribute('style'), /width: 0%/,
     'the bar empties with the words, not later');
 });
@@ -1016,7 +1068,7 @@ test('a retry that is waiting for the server says so', async () => {
 // The give-up sentence is the headline's detail AND the story's final line; the screen said it
 // twice in a row, which reads as a stutter. Once in plain sight; the record stays in the fold.
 test('the give-up sentence is not said twice above the fold', async () => {
-  const said = 'No he podido conseguir esta temporada: la única copia que había venía dañada.';
+  const said = 'No he podido conseguir esta temporada: la única copia que había estaba estropeada.';
   const finished = [
     { id: 7, title: 'GoT', ok: false, retrying: false, series: true, subtitle_note: '',
       cover_url: null, year: '', languages: {}, next_id: null, attempt: 1, attempts_total: 1,
@@ -1043,7 +1095,7 @@ test('when every copy has been tried it says so once, and stops', async () => {
     { id: 7, title: 'El Sur', ok: false, retrying: false, series: false, subtitle_note: '',
       cover_url: null, year: '1983', languages: {}, next_id: null, attempt: 3, attempts_total: 3,
       untried: 0,
-      detail: 'No he podido conseguir esta película: he probado las 3 copias que había y todas venían dañadas.' },
+      detail: 'No he podido conseguir esta película: he probado las 3 copias que había y todas estaban estropeadas.' },
   ];
   const app = start({ finished });
   await searchFor(app, 'el sur');
@@ -1055,7 +1107,7 @@ test('when every copy has been tried it says so once, and stops', async () => {
 
   const screen = app.document.getElementById('screen-film');
   assert.match(screen.textContent, /No he podido conseguirla/);
-  assert.match(screen.textContent, /venían dañadas/);
+  assert.match(screen.textContent, /estaban estropeadas/);
   assert.ok(!app.document.getElementById('try-more'),
     'nothing left to try, so no button pretends otherwise');
 });
@@ -1067,7 +1119,7 @@ test('a give-up with copies left offers to try them, and follows the new attempt
     { id: 7, title: 'El Sur', ok: false, retrying: false, series: false, subtitle_note: '',
       cover_url: null, year: '1983', languages: {}, next_id: null, attempt: 3, attempts_total: 8,
       untried: 5,
-      detail: 'No he podido conseguir esta película: he probado 3 copias y todas venían dañadas; quedan 5 sin probar.' },
+      detail: 'No he podido conseguir esta película: he probado 3 copias y todas estaban estropeadas; quedan 5 sin probar.' },
   ];
   const app = start({ finished });
   await searchFor(app, 'el sur');
@@ -1083,7 +1135,7 @@ test('a give-up with copies left offers to try them, and follows the new attempt
   await settle();
 
   assert.equal(app.calls.find((call) => call.command === 'try_more').args.id, 7);
-  assert.match(app.document.getElementById('now-status').textContent, /Buscando otra versión/,
+  assert.match(app.document.getElementById('now-status').textContent, /Buscando otra copia/,
     'the screen follows the new attempt instead of staying on the corpse');
 });
 
@@ -1406,7 +1458,7 @@ test('the shelf says it holds series, not only films', async () => {
 test('everything the app does on its own is written down where she can read it', async () => {
   const story = [
     { at: 1_755_712_940, said: 'Empieza la descarga.', why: 'copia 1 de 3' },
-    { at: 1_755_713_260, said: 'Esa descarga venía dañada, así que la he descartado.',
+    { at: 1_755_713_260, said: 'Esa copia estaba estropeada, así que la he descartado.',
       why: 'FAILURE/HEALTH: faltaban 829 de 14368 partes, salud 93.8%' },
     { at: 1_755_713_263, said: 'Empieza la descarga de otra versión.', why: 'copia 2 de 3' },
   ];
@@ -1425,7 +1477,7 @@ test('everything the app does on its own is written down where she can read it',
   assert.match(latest.textContent, /otra versión/, 'the latest line is in plain sight');
   const lines = [...app.document.querySelectorAll('#screen-film .story li')];
   assert.equal(lines.length, 3, 'the whole story, not just the latest line');
-  assert.match(lines[1].textContent, /venía dañada/);
+  assert.match(lines[1].textContent, /estaba estropeada/);
   // the technical reason stays within reach without being said out loud
   assert.match(lines[1].getAttribute('title'), /FAILURE\/HEALTH/);
   assert.ok(app.document.querySelector('.story-fold summary'), 'and it waits behind a fold');
@@ -1437,7 +1489,7 @@ test('the download screen never says the words copia, partes or a status code', 
   const active = [
     { id: 8, title: 'El Sur', status: 'downloading', percent: 3, cover_url: null, year: '1983',
       beneath: 'Unos 40 minutos', speed: '25 MB/s', attempt: 3, attempts_total: 3, series: false,
-      story: [{ at: 1_755_713_260, said: 'Esa descarga venía dañada, así que la he descartado.',
+      story: [{ at: 1_755_713_260, said: 'Esa copia estaba estropeada, así que la he descartado.',
                 why: 'FAILURE/HEALTH: faltaban 71 de 6257 partes' }] },
   ];
   const app = start({ active });

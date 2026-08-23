@@ -19,15 +19,6 @@ impl Gathered {
     pub fn is_total_failure(&self) -> bool {
         self.results.is_empty() && !self.problems.is_empty()
     }
-
-    /// What a second question found, folded in. The same title asked for under two names answers
-    /// with the same releases twice, and those are one release, not two.
-    pub fn absorb(&mut self, other: Gathered) {
-        for release in other.results {
-            merge(&mut self.results, release);
-        }
-        self.problems.extend(other.problems);
-    }
 }
 
 pub fn gather<'a>(
@@ -261,41 +252,6 @@ mod tests {
         );
         assert_eq!(gathered.results.len(), 1);
         assert_eq!(gathered.results[0].grabs, 250, "the better evidence wins");
-    }
-
-    // The same title asked for under two names, because she typed one and the releases carry the
-    // other, answers with the same post twice.
-    #[test]
-    fn what_two_questions_both_found_is_still_one_release() {
-        let indexer = answering(vec![release("A.Film.2020.1080p-X", 2000, 10)]);
-        let mut gathered = gather(
-            [("one", &indexer as &dyn Indexer)],
-            &Query::Title("film".into()),
-            None,
-        );
-        gathered.absorb(gather(
-            [("one", &indexer as &dyn Indexer)],
-            &Query::Title("pelicula".into()),
-            None,
-        ));
-        assert_eq!(gathered.results.len(), 1);
-        assert!(gathered.problems.is_empty());
-    }
-
-    #[test]
-    fn a_second_question_that_failed_is_reported_alongside_the_first() {
-        let mut gathered = gather(
-            [("good", &answering(Vec::new()) as &dyn Indexer)],
-            &Query::Title("film".into()),
-            None,
-        );
-        gathered.absorb(gather(
-            [("bad", &refusing() as &dyn Indexer)],
-            &Query::Title("pelicula".into()),
-            None,
-        ));
-        assert_eq!(gathered.problems.len(), 1);
-        assert_eq!(gathered.problems[0].0, "bad");
     }
 
     #[test]

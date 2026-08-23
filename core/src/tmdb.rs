@@ -7,7 +7,7 @@
 use crate::error::{Error, Result};
 use crate::http::{expect_success, HttpClient, Request};
 use crate::indexer::{encode_component, ShowIds};
-use crate::lookup::{shown_title, Picked, Suggestion};
+use crate::lookup::{Picked, Suggestion};
 use crate::search::fold;
 use crate::series::Episode;
 use serde_json::Value;
@@ -81,7 +81,9 @@ impl<H: HttpClient> Tmdb<H> {
     /// film's IMDb id and a show's international name, neither of which the search result carries,
     /// so picking costs one more lookup.
     pub fn resolve(&self, suggestion: &Suggestion) -> Result<Picked> {
-        let title = shown_title(&suggestion.title, suggestion.original.as_deref());
+        // her own language, and only that: the original belongs beside it in the list she chooses
+        // from, where it tells two titles apart, and nowhere else
+        let title = suggestion.title.clone();
         if suggestion.series {
             // the indexer files a show under its tvdb id and its packs under an international
             // name; both come back in one answer, and neither is in the suggestion
@@ -337,7 +339,8 @@ pub fn parse_suggestions(answer: &Value) -> Vec<Suggestion> {
                 text("original_title")
             }
             // the parentheses appear only when the original is genuinely another name
-            .filter(|original| fold(original).to_lowercase() != fold(&title).to_lowercase());
+            .filter(|original| fold(original).to_lowercase() != fold(&title).to_lowercase())
+            .filter(|original| crate::lookup::readable(original));
             // an unreleased title has nothing on usenet to satisfy it
             let year = if series {
                 text("first_air_date")
@@ -397,7 +400,10 @@ mod tests {
         assert_eq!(found[0].title, "El hoyo");
         assert_eq!(found[0].original, None, "El hoyo is its own original");
         assert_eq!(found[2].title, "Parásitos");
-        assert_eq!(found[2].original.as_deref(), Some("기생충"));
+        assert_eq!(
+            found[2].original, None,
+            "a name in a script she cannot read is not a name to put beside another"
+        );
         assert!(found[1].series);
         assert_eq!(
             found[0].poster_url.as_deref(),
@@ -547,9 +553,10 @@ mod tests {
     }
 
     // The indexer files releases under the IMDb id; TMDB's search result does not carry it, so
-    // picking costs one more lookup, and the picked name keeps the original in parentheses.
+    // picking costs one more lookup. The name that comes back is hers alone: the original beside
+    // it belongs in the list she chooses from, where it tells two titles apart.
     #[test]
-    fn a_picked_film_is_searched_by_its_imdb_id_and_named_with_both_titles() {
+    fn a_picked_film_is_searched_by_its_imdb_id_and_named_in_her_language() {
         let service = service(vec![FakeHttp::status(
             200,
             r#"{"id": 432787, "imdb_id": "tt8228288"}"#,
@@ -558,7 +565,7 @@ mod tests {
             .resolve(&film("432787", "El hoyo", Some("The Platform")))
             .expect("resolved");
         assert_eq!(picked.query, "tt8228288");
-        assert_eq!(picked.title, "El hoyo (The Platform)");
+        assert_eq!(picked.title, "El hoyo");
         assert!(service
             .http
             .last_url()

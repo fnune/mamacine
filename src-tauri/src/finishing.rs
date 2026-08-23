@@ -31,18 +31,21 @@ pub struct Outcome {
 impl Outcome {
     pub fn describe(&self) -> String {
         if self.saved > 0 {
-            return format!("Subtítulos en español añadidos ({})", self.saved);
+            return match self.saved {
+                1 => "Subtítulos en español añadidos".to_string(),
+                saved => format!("Subtítulos en español añadidos a {saved} episodios"),
+            };
         }
         if self.spent {
             return ALLOWANCE_GONE.to_string();
         }
         if !self.refused.is_empty() {
-            return "Los subtítulos existen, pero no se han podido descargar ahora".to_string();
+            return "Hay subtítulos, pero ahora mismo no se han podido descargar".to_string();
         }
         if self.mistimed > 0 {
-            return "Los subtítulos que hay no encajan con esta versión".to_string();
+            return "Los subtítulos que hay no son de esta copia".to_string();
         }
-        "No hay subtítulos en español para esta versión".to_string()
+        "No hay subtítulos en español para esta copia".to_string()
     }
 }
 
@@ -552,8 +555,11 @@ fn summarise(looks: &[Look], series: bool) -> String {
         Some(episodes) if episodes.len() <= 3 => {
             format!("Faltan los subtítulos {}", of_episodes(&episodes))
         }
+        _ if missing.len() == looks.len() => {
+            format!("Faltan los subtítulos de los {} episodios", looks.len())
+        }
         _ => format!(
-            "Faltan los subtítulos de {} de los {} episodios",
+            "Faltan los subtítulos de {} episodios de {}",
             missing.len(),
             looks.len()
         ),
@@ -766,7 +772,7 @@ mod tests {
         let many: Vec<Look> = (1..=5).map(|number| look(number, missing())).collect();
         assert_eq!(
             summarise(&many, true),
-            "Faltan los subtítulos de 5 de los 5 episodios"
+            "Faltan los subtítulos de los 5 episodios"
         );
 
         let unnamed = vec![
@@ -779,7 +785,7 @@ mod tests {
         ];
         assert_eq!(
             summarise(&unnamed, true),
-            "Faltan los subtítulos de 2 de los 2 episodios"
+            "Faltan los subtítulos de los 2 episodios"
         );
     }
 
@@ -788,13 +794,13 @@ mod tests {
         let refused = vec![Look {
             episode: None,
             subtitles: Subtitles::Missing(
-                "Los subtítulos existen, pero no se han podido descargar ahora".into(),
+                "Hay subtítulos, pero ahora mismo no se han podido descargar".into(),
             ),
             spent: false,
         }];
         assert_eq!(
             summarise(&refused, false),
-            "Los subtítulos existen, pero no se han podido descargar ahora"
+            "Hay subtítulos, pero ahora mismo no se han podido descargar"
         );
         let fine = vec![Look {
             episode: None,

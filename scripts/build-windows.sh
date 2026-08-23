@@ -42,8 +42,12 @@ export PATH="/root/.cargo/bin:$PATH"
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
+# libayatana-appindicator3-dev and pkg-config are not for the Windows binary. tauri-cli gates its
+# appindicator probe on the host it runs on rather than the target, and the tray-icon feature makes
+# it probe, so bundling for Windows from Linux panics without them.
 apt-get install --yes --no-install-recommends \
-    build-essential ca-certificates clang curl git llvm-dev libclang-dev nsis
+    build-essential ca-certificates clang curl git llvm-dev libclang-dev nsis \
+    libayatana-appindicator3-dev pkg-config
 
 if [[ ! -x /root/.cargo/bin/rustup ]]; then
     curl --proto '=https' --tlsv1.2 --fail --silent --show-error https://sh.rustup.rs \

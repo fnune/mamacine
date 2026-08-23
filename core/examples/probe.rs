@@ -10,7 +10,7 @@ use mamacine_core::clock::SystemClock;
 use mamacine_core::error::Result;
 use mamacine_core::http::{HttpClient, Request, Response};
 use mamacine_core::indexer::{Category, Indexer, Newznab, Query};
-use mamacine_core::lookup::Lookup;
+use mamacine_core::lookup::{Lookup, Picked};
 use mamacine_core::net::Network;
 use mamacine_core::release::Preference;
 use mamacine_core::search::{gather, relevance};
@@ -140,6 +140,49 @@ fn show_of(query: &str) -> (String, mamacine_core::indexer::ShowIds) {
     }
 }
 
+/// The best film and the best series her words name, resolved the way the app resolves a tapped
+/// row: the keyless pair, IMDb for the title and TVMaze for the ids the indexer files a show under.
+fn identify(query: &str) -> Vec<Picked> {
+    let lookup = Lookup::new(CachedHttp::new());
+    let Ok(found) = lookup.suggest(query) else {
+        return Vec::new();
+    };
+    // the provider's own order, so the first one is its answer to which of the two she meant
+    let mut resolved: Vec<Picked> = Vec::new();
+    for suggestion in &found {
+        if resolved.iter().any(|done| done.series == suggestion.series) {
+            continue;
+        }
+        let picked = mamacine_core::lookup::resolve(suggestion);
+        eprintln!(
+            "[identified] {query} → {} ({})",
+            picked.title,
+            if picked.series { "serie" } else { "film" }
+        );
+        let ids = picked
+            .show
+            .imdb
+            .as_deref()
+            .filter(|_| picked.series)
+            .map(|imdb| mamacine_core::tvmaze::TvMaze::new(CachedHttp::new()).ids_for(imdb));
+        match ids {
+            Some(Ok(ids)) => {
+                eprintln!("[show] {} → {ids:?}", picked.title);
+                resolved.push(Picked {
+                    show: ids,
+                    ..picked
+                });
+            }
+            Some(Err(failure)) => {
+                eprintln!("[show] {failure}");
+                resolved.push(picked);
+            }
+            None => resolved.push(picked),
+        }
+    }
+    resolved
+}
+
 fn show_search(query: &str, kind: Option<&str>) {
     let preference = match std::env::var("PROBE_LANG").as_deref() {
         Ok("es") => Preference::Spanish,
@@ -150,27 +193,56 @@ fn show_search(query: &str, kind: Option<&str>) {
     let indexers = [("real", &indexer as &dyn Indexer)];
     let parsed = Query::parse(query).expect("a query");
 
-    let films_found = if kind == Some("series") {
-        Vec::new()
-    } else {
-        let gathered = gather(indexers, &parsed, Some(Category::Movies));
-        for (name, error) in &gathered.problems {
-            eprintln!("problem: {name}: {error}");
+    // the same identification the orchestrator does before it asks anything: her words name a
+    // thing, and the indexer is asked for the thing. Only words she typed need it.
+    let identified = match (&parsed, kind) {
+        (Query::Imdb(_), _) | (_, Some(_)) => Vec::new(),
+        _ => identify(query),
+    };
+    let identified_as = |series: bool| identified.iter().find(|found| found.series == series);
+    let (film, series) = (identified_as(false), identified_as(true));
+    let recognised = !identified.is_empty();
+    // the provider's order is its answer to which of the two the name means
+    let certain = |series: bool| match identified.first() {
+        Some(first) if first.series != series => 2.0,
+        _ => 3.0,
+    };
+
+    // her own words are the question of last resort, for when nothing recognised them at all
+    let film_question = match (film, recognised) {
+        (Some(picked), _) => Query::parse(&picked.query),
+        (None, false) => Some(parsed.clone()),
+        (None, true) => None,
+    };
+    let films_found = match (kind, &film_question) {
+        (Some("series"), _) | (_, None) => Vec::new(),
+        (_, Some(question)) => {
+            let gathered = gather(indexers, question, Some(Category::Movies));
+            for (name, error) in &gathered.problems {
+                eprintln!("problem: {name}: {error}");
+            }
+            gathered.results
         }
-        gathered.results
     };
-    let (name, show) = if kind == Some("series") {
-        show_of(query)
-    } else {
-        (query.to_string(), Default::default())
+    let judge_films_by = match &film_question {
+        None | Some(Query::Imdb(_)) => None,
+        Some(_) => Some(film.map(|picked| picked.query.as_str()).unwrap_or(query)),
     };
-    let seasons_found = if kind == Some("film") || matches!(parsed, Query::Imdb(_)) {
+
+    let (name, show) = match (series, kind) {
+        (Some(picked), _) => (picked.title.clone(), picked.show.clone()),
+        (None, Some("series")) => show_of(query),
+        _ => (query.to_string(), Default::default()),
+    };
+    let show_named = series.map(|picked| picked.query.as_str()).unwrap_or(query);
+    let television = kind.is_some() || !recognised || series.is_some();
+    let seasons_found = if kind == Some("film") || matches!(parsed, Query::Imdb(_)) || !television {
         Vec::new()
     } else {
         let gathered = gather(
             indexers,
             &Query::Show {
-                name: mamacine_core::search::fold(query.trim()),
+                name: mamacine_core::search::fold(show_named.trim()),
                 ids: show.clone(),
             },
             Some(Category::Television),
@@ -186,22 +258,23 @@ fn show_search(query: &str, kind: Option<&str>) {
     let seasons = mamacine_core::series::group_seasons(seasons_found, preference, named);
 
     // the same relevance the orchestrator computes: the display title and the release names
-    let looks_like = |name: &str, releases: &[mamacine_core::indexer::SearchResult]| {
-        releases
-            .iter()
-            .take(5)
-            .map(|release| relevance(query, &release.title))
-            .fold(relevance(query, name), f64::max)
-    };
+    let looks_like =
+        |asked: &str, name: &str, releases: &[mamacine_core::indexer::SearchResult]| {
+            releases
+                .iter()
+                .take(5)
+                .map(|release| relevance(asked, &release.title))
+                .fold(relevance(asked, name), f64::max)
+        };
 
     // the same merged ordering the window applies
     let mut cards: Vec<(f64, String, Vec<String>)> = Vec::new();
     for film in &films {
         let best = film.best();
         cards.push((
-            match parsed {
-                Query::Imdb(_) => 3.0,
-                _ => looks_like(&film.title, &film.releases),
+            match judge_films_by {
+                Some(asked) => looks_like(asked, &film.title, &film.releases),
+                None => certain(false),
             },
             format!(
                 "[film]   {:40} {}  · {:.1} GB · {} grabs · {} releases",
@@ -222,8 +295,8 @@ fn show_search(query: &str, kind: Option<&str>) {
         let best = season.best();
         cards.push((
             match named {
-                Some(_) => 3.0,
-                None => looks_like(&season.show, &season.releases),
+                Some(_) => certain(true),
+                None => looks_like(show_named, &season.show, &season.releases),
             },
             format!(
                 "[season] {:40} {}  {:.1} GB · {} grabs · {} releases",

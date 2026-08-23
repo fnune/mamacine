@@ -42,26 +42,35 @@ pub fn explain(error: &Error) -> Explained {
         Error::Refused { what, status, .. } => match status {
             401 | 403 | 100..=199 => format!(
                 "{} ha rechazado la clave. Hay que revisar los ajustes.",
-                capitalised(role_of(what))
+                subject_of(what)
             ),
             429 => format!(
-                "{} dice que hemos pedido demasiadas cosas por hoy. Prueba mañana.",
-                capitalised(role_of(what))
+                "{} dice que hemos pedido demasiadas cosas por hoy. Vuelve a probar mañana.",
+                subject_of(what)
             ),
             _ => format!(
-                "{} no ha aceptado la petición. Vuelve a probarlo en un rato.",
-                capitalised(role_of(what))
+                "{} no ha aceptado lo que le he pedido. Vuelve a probar dentro de un rato.",
+                subject_of(what)
             ),
         },
         Error::Unreadable { what, .. } => format!(
-            "{} ha contestado algo que no he entendido. Vuelve a probarlo en un rato.",
-            capitalised(role_of(what))
+            "{} ha contestado algo que no he entendido. Vuelve a probar dentro de un rato.",
+            subject_of(what)
         ),
         // already phrased for a person by whoever raised it
         Error::Setup(message) => message.clone(),
-        Error::Io(_) => "Algo ha fallado en este ordenador. Vuelve a probarlo.".to_string(),
+        Error::Io(_) => "Algo ha fallado en este ordenador. Vuelve a probar.".to_string(),
     };
     Explained { said, why }
+}
+
+/// The same service, as the subject of a sentence. An unknown hostname has no role she knows,
+/// and "Internet ha contestado algo que no he entendido" is a sentence about nothing.
+fn subject_of(what: &str) -> String {
+    match role_of(what) {
+        "internet" => "Un sitio de internet".to_string(),
+        role => capitalised(role),
+    }
 }
 
 fn capitalised(text: &str) -> String {
@@ -81,10 +90,12 @@ pub fn gave_up(series: bool, tried: usize, untried: usize) -> String {
         "esta película"
     };
     let what_happened = match (tried, untried) {
-        (0 | 1, 0) => "la única copia que había venía dañada".to_string(),
-        (tried, 0) => format!("he probado las {tried} copias que había y todas venían dañadas"),
+        (0 | 1, 0) => "la única copia que había estaba estropeada".to_string(),
+        (tried, 0) => {
+            format!("he probado las {tried} copias que había y todas estaban estropeadas")
+        }
         (tried, untried) => {
-            format!("he probado {tried} copias y todas venían dañadas; quedan {untried} sin probar")
+            format!("he probado {tried} copias y todas estaban estropeadas; quedan {untried} sin probar")
         }
     };
     format!("No he podido conseguir {thing}: {what_happened}. Vuelve a probar dentro de unos días.")
@@ -93,11 +104,14 @@ pub fn gave_up(series: bool, tried: usize, untried: usize) -> String {
 /// The server rejecting the account and the server being unreachable are different facts with
 /// different remedies, and neither is terminal: the chase waits and keeps trying on its own, and
 /// both sentences say so, because an instruction with no named next step is a dead end.
-pub const SERVER_REFUSED: &str = "El servidor de descargas ha rechazado el usuario o la contraseña.      Hay que revisar los ajustes; en cuanto estén bien, sigo yo solo.";
+pub const SERVER_REFUSED: &str =
+    "El servidor de descargas ha rechazado el usuario o la contraseña. \
+    Hay que revisar los ajustes; en cuanto estén bien, sigo yo solo.";
 
-pub const SERVER_UNREACHABLE: &str = "No consigo conectarme al servidor de descargas. Puede que      ahora mismo no haya internet. Lo sigo intentando yo solo.";
+pub const SERVER_UNREACHABLE: &str = "No consigo conectarme al servidor de descargas. \
+    Puede que ahora mismo no haya internet. Lo sigo intentando yo solo.";
 
-pub const GAVE_UP_ON_THIS_COPY: &str = "Esa descarga venía dañada, así que la he descartado.";
+pub const GAVE_UP_ON_THIS_COPY: &str = "Esa copia estaba estropeada, así que la he descartado.";
 
 pub const CANCELLED: &str = "Has cancelado la descarga.";
 

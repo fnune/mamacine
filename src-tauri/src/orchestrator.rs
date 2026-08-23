@@ -239,6 +239,10 @@ pub struct Found {
     pub seasons: Vec<SeasonCard>,
     /// A place that could not answer, named. The rest of the results still stand.
     pub notice: Option<String>,
+    /// The search knew which title she meant, whether she picked it, typed its id or typed its
+    /// name. An empty answer then means the sites do not carry it, and saying "no hay nada con ese
+    /// nombre" would blame her for their gaps.
+    pub exact: bool,
 }
 
 /// One release of a film, described as she would judge it rather than as it is named.
@@ -477,6 +481,7 @@ impl Orchestrator {
                 films: Vec::new(),
                 seasons: Vec::new(),
                 notice: None,
+                exact: false,
             });
         };
         let indexers = || {
@@ -495,52 +500,75 @@ impl Orchestrator {
             results: Vec::new(),
             problems: Vec::new(),
         };
-        // a suggestion she tapped already arrived in the name the indexer knows, and an id names
-        // one film outright: only words she typed herself may need translating
-        let translated = match (&parsed, kind) {
+        // she typed a name and pressed Buscar, which must mean what tapping the first row means:
+        // work out what it names, then ask the indexer for that. An id she typed already names one
+        // film, and a suggestion she tapped arrived identified.
+        let identified = match (&parsed, kind) {
             (Query::Imdb(_), _) | (_, Some(_)) => Vec::new(),
-            _ => self.also_called(query),
+            _ => self.identify(query),
         };
-        let elsewhere = |series: bool| translated.iter().find(|other| other.series == series);
-        let mut names = vec![query.to_string()];
-        for other in &translated {
-            names.push(other.title.clone());
-            // a film's query is its id, which names nothing; a show's is the name it is released
-            // under everywhere, which is the one worth recognising
-            if other.series {
-                names.push(other.query.clone());
-            }
-        }
+        let identified_as = |series: bool| identified.iter().find(|found| found.series == series);
+        // an id names one title beyond doubt, but a name she typed still has to say whether she
+        // meant the film or the series of the same name. The provider offered them in an order,
+        // and that order is its own answer: what it put first is what the name means, and the
+        // other kind stays on the screen below it rather than tying with it.
+        let certain = |series: bool| match identified.first() {
+            Some(first) if first.series != series => 2.0,
+            _ => 3.0,
+        };
 
-        let films_found = if kind == Some("series") {
-            nothing()
-        } else {
-            let mut found = gather(indexers(), &parsed, Some(Category::Movies));
-            if let Some(other) = elsewhere(false).and_then(|other| Query::parse(&other.query)) {
-                found.absorb(gather(indexers(), &other, Some(Category::Movies)));
-            }
-            found
+        // the film she meant, asked for by whatever names it: an IMDb id where the provider
+        // registers one, the international name where it does not. Her own words are the question
+        // of last resort, for when nothing recognised them at all: a provider that answered with a
+        // series and no film has said there is no film, and asking anyway spends a search hit to
+        // be told the same thing in noise.
+        let film_question = match (identified_as(false), identified.is_empty()) {
+            (Some(film), _) => Query::parse(&film.query),
+            (None, true) => Some(parsed.clone()),
+            (None, false) => None,
         };
-        // a name she typed herself identifies no show; the title it translates to may have
+        // the name an answer has to resemble, or nothing at all when the question named one film
+        // outright and there is no room left for the indexer to have misunderstood
+        let judge_films_by = match &film_question {
+            None | Some(Query::Imdb(_)) => None,
+            Some(_) => Some(
+                identified_as(false)
+                    .map(|film| film.query.as_str())
+                    .unwrap_or(query),
+            ),
+        };
+        let films_found = match (kind, &film_question) {
+            (Some("series"), _) | (_, None) => nothing(),
+            (_, Some(question)) => gather(indexers(), question, Some(Category::Movies)),
+        };
+
         let picked_show = self.picked_show(query);
         let show = match picked_show.any() {
             true => picked_show,
-            false => elsewhere(true)
-                .map(|other| other.show.clone())
+            false => identified_as(true)
+                .map(|found| found.show.clone())
                 .unwrap_or_default(),
         };
         *self.searched_show.lock().expect("not poisoned") = show.clone();
+        // the name the packs carry, which the indexer only falls back on when no id identified the
+        // show. Her own words are the last resort, the same as for a film.
+        let show_named = identified_as(true)
+            .map(|found| found.query.as_str())
+            .unwrap_or(query);
+        // the same last resort as a film's: television is asked for the show that was identified,
+        // or for her words when nothing at all was, and not at all when the name turned out to
+        // mean a film
+        let television = identified.is_empty() || identified_as(true).is_some();
         // an id names one film exactly; asking television for it would answer with noise
         let seasons_found = match &parsed {
             Query::Imdb(_) => nothing(),
             _ if kind == Some("film") => nothing(),
-            // once a show is identified the indexer answers by id and the name goes unused, so
-            // one exact question replaces her words and a translation of them both asked loosely
+            _ if !television => nothing(),
             _ => gather(
                 indexers(),
                 &Query::Show {
                     // releases are filed in scene ASCII, so the name rung has to be folded too
-                    name: mamacine_core::search::fold(query.trim()),
+                    name: mamacine_core::search::fold(show_named.trim()),
                     ids: show.clone(),
                 },
                 Some(Category::Television),
@@ -588,10 +616,10 @@ impl Orchestrator {
                     free,
                     film.best().map(|release| release.size_bytes).unwrap_or(0),
                 ),
-                relevance: match &parsed {
-                    // she picked it by its exact id: there is nothing more relevant
-                    Query::Imdb(_) => 3.0,
-                    _ => looks_like(&names, &film.title, &film.releases),
+                relevance: match judge_films_by {
+                    Some(asked) => looks_like(asked, &film.title, &film.releases),
+                    // asked by an id, which names one film: whatever came back is that film
+                    None => certain(false),
                 },
             })
             // sharing not one word with what she typed, in the card or in any release, is the
@@ -604,7 +632,7 @@ impl Orchestrator {
         // it with, and there is nothing left to second-guess
         let named = show.any().then(|| {
             shown
-                .or(elsewhere(true).map(|other| other.title.as_str()))
+                .or(identified_as(true).map(|found| found.title.as_str()))
                 .unwrap_or(query)
         });
         let seasons = group_seasons(seasons_found.results, self.preference, named);
@@ -632,8 +660,8 @@ impl Orchestrator {
                     season.best().map(|release| release.size_bytes).unwrap_or(0),
                 ),
                 relevance: match named {
-                    Some(_) => 3.0,
-                    None => looks_like(&names, &season.show, &season.releases),
+                    Some(_) => certain(true),
+                    None => looks_like(show_named, &season.show, &season.releases),
                 },
             })
             .filter(|card| card.relevance > 0.0)
@@ -652,6 +680,7 @@ impl Orchestrator {
             films: film_cards,
             seasons: season_cards,
             notice,
+            exact: kind.is_some() || matches!(parsed, Query::Imdb(_)) || !identified.is_empty(),
         })
     }
 
@@ -721,41 +750,53 @@ impl Orchestrator {
         }
     }
 
-    /// The same titles under the names releases actually carry.
+    /// What she means, worked out before an indexer is asked anything.
     ///
-    /// She types the name she knows. "juego de tronos" answered with nothing at every indexer
-    /// while "game of thrones" answered with nine seasons of the same show, and "los simpson"
-    /// answered with The Simpsons under a name that scored zero against her words and was thrown
-    /// away. Matching a name in any language to the one thing it names is what the title
-    /// providers are for, so a name she typed herself goes through them before it is asked of an
-    /// indexer. Her words are still searched: the translation is a second question whose answers
-    /// join the first, so a provider guessing wrong costs noise the ranking already filters.
+    /// Tapping a suggestion resolves the title and then searches by the id that names it. Typing
+    /// the same name and pressing Buscar used to send her words straight to an indexer, so the two
+    /// ways of starting a search answered differently: "El castillo ambulante" found the film when
+    /// tapped and nothing at all when typed, because the releases are named "Howl\'s Moving Castle"
+    /// and no indexer has ever heard of the Spanish name. She does not know the two are different.
+    /// So they are one thing: her words are identified first, exactly as a tap does it, and the
+    /// search that follows is the search a tap would have run.
     ///
-    /// One translation per kind, because a typed name is asked of both films and television and
-    /// translating only one of them leaves the other still asking in the wrong language.
-    fn also_called(&self, typed: &str) -> Vec<Picked> {
+    /// The best film and the best series, because a typed name says which of the two it is only
+    /// when she picks a row. What the provider offered is taken as it stands: matching a name in
+    /// any language to the thing it names is the one job it has, and it does it against a list of
+    /// aliases nothing here can see. IMDb answers "juego de tronos" with "Game of Thrones" and
+    /// says nothing about why, and a check that the answer resembles the question would throw that
+    /// away. Where it recognised nothing, her own words are the question.
+    ///
+    /// The order is the provider's, and the first offer is its answer to which of the two she
+    /// meant.
+    fn identify(&self, typed: &str) -> Vec<Picked> {
         let suggestions = self.suggestions_for(typed);
-        let mut translated = Vec::new();
-        for series in [false, true] {
-            let Some(suggestion) = suggestions.iter().find(|found| found.series == series) else {
-                continue;
+        let mut resolved: Vec<Picked> = Vec::new();
+        // walked in the provider's own order, so the first one resolved is the first one it
+        // offered, and one of each kind because a typed name says which it is only when tapped.
+        // One attempt each: a provider that could not resolve the best title it has will not do
+        // better with the next, and every attempt is a call somebody else is paying for.
+        let (mut tried_film, mut tried_series) = (false, false);
+        for suggestion in &suggestions {
+            let tried = match suggestion.series {
+                true => &mut tried_series,
+                false => &mut tried_film,
             };
-            // the name a release would carry: the original where the provider states one, since
-            // a provider that answers in her language names the very thing she already typed
-            let filed_under = suggestion.original.as_deref().unwrap_or(&suggestion.title);
-            if mamacine_core::search::relevance(typed, filed_under) >= 3.0 {
+            if *tried {
                 continue;
             }
+            *tried = true;
             match self.suggestions.resolve(suggestion) {
-                Ok(picked) => translated.push(picked),
+                Ok(picked) => resolved.push(picked),
+                // identifying it is what fails, not the search: her words are still a question
                 Err(failure) => self.log.line(&format!(
-                    "search: \"{typed}\" is also \"{}\", but: {}",
+                    "search: \"{typed}\" looks like \"{}\", but: {}",
                     suggestion.title,
                     messages::explain(&failure).why
                 )),
             }
         }
-        translated
+        resolved
     }
 
     /// The ids of the show she picked, when the search that follows is for that same show. A name
@@ -951,7 +992,7 @@ impl Orchestrator {
                     too_big.get_or_insert(release.size_bytes);
                     skipped.push((
                         format!(
-                            "Una copia de {} no cabe en el disco, así que la he saltado.",
+                            "Una copia de {} no cabe en el disco, así que la he descartado.",
                             gigabytes(release.size_bytes)
                         ),
                         release.title.clone(),
@@ -960,11 +1001,10 @@ impl Orchestrator {
                 }
             }
             let Some(indexer) = self.indexer_for(&release.nzb_url) else {
-                trouble.get_or_insert(
-                    "Esa copia ya no pertenece a ningún buscador configurado.".into(),
-                );
+                trouble.get_or_insert("Ese buscador ya no está en los ajustes.".into());
                 skipped.push((
-                    "Una de las copias no se ha podido pedir, así que la he saltado.".into(),
+                    "No he podido pedir una de las copias, así que he pasado a la siguiente."
+                        .into(),
                     format!("{}: no configured indexer", release.nzb_url),
                 ));
                 continue;
@@ -984,7 +1024,8 @@ impl Orchestrator {
                     self.log.line(&format!("start: {}", explained.why));
                     trouble.get_or_insert(explained.said);
                     skipped.push((
-                        "Una de las copias no se ha podido pedir, así que la he saltado.".into(),
+                        "No he podido pedir una de las copias, así que he pasado a la siguiente."
+                            .into(),
                         explained.why,
                     ));
                     continue;
@@ -1006,7 +1047,8 @@ impl Orchestrator {
                     self.log.line(&format!("start: {}", explained.why));
                     trouble.get_or_insert(explained.said);
                     skipped.push((
-                        "Una de las copias no se ha podido pedir, así que la he saltado.".into(),
+                        "No he podido pedir una de las copias, así que he pasado a la siguiente."
+                            .into(),
                         explained.why,
                     ));
                     continue;
@@ -1035,7 +1077,7 @@ impl Orchestrator {
                     if first {
                         "Empieza la descarga"
                     } else {
-                        "Empieza la descarga de otra versión"
+                        "Empieza la descarga de otra copia"
                     },
                     gigabytes(release.size_bytes)
                 ),
@@ -1678,8 +1720,8 @@ impl Orchestrator {
         };
         if queue.is_empty() {
             return TrayReport {
-                tooltip: "Mamá Cine · No hay nada descargándose".to_string(),
-                summary: "No hay nada descargándose".to_string(),
+                tooltip: "Mamá Cine · No se está descargando nada".to_string(),
+                summary: "No se está descargando nada".to_string(),
             };
         }
         let rate = self.downloader.download_rate().unwrap_or(0);
@@ -1751,7 +1793,7 @@ impl Orchestrator {
         self.remover.remove(&folder)?;
         self.library.note(
             id,
-            "La has enviado a la papelera. Desde allí todavía se puede recuperar.",
+            "La has enviado a la papelera. Desde ahí todavía la puedes recuperar.",
             "sent to the recycle bin",
         );
         Ok(())
@@ -2097,7 +2139,7 @@ impl Orchestrator {
             self.indexer_for(url)
                 .ok_or_else(|| {
                     mamacine_core::error::Error::Setup(
-                        "Esa imagen no es de ningún buscador configurado.".into(),
+                        "Esa imagen viene de un buscador que ya no está en los ajustes.".into(),
                     )
                 })
                 .and_then(|indexer| indexer.cover(url))
@@ -2168,20 +2210,14 @@ fn language_of(release: &SearchResult) -> String {
 /// How much this entry looks like what she typed. The card's display title comes from the film
 /// database and may be in another language ("Champions" for a "campeones" search), so the release
 /// names, which carry the title the thing was actually filed under, get a vote too.
-/// How much a card looks like what she asked for, over every name the title goes by. She typed
-/// "juego de tronos" and every release is named "Game of Thrones": scoring her words alone would
-/// throw away the show she asked for as free association.
-fn looks_like(names: &[String], name: &str, releases: &[SearchResult]) -> f64 {
-    names
+/// How much a card looks like the name the question actually asked for. Only a loose question is
+/// judged this way: an indexer given words can free-associate, and one given an id cannot.
+fn looks_like(asked: &str, name: &str, releases: &[SearchResult]) -> f64 {
+    releases
         .iter()
-        .map(|asked| {
-            releases
-                .iter()
-                .take(5)
-                .map(|release| mamacine_core::search::relevance(asked, &release.title))
-                .fold(mamacine_core::search::relevance(asked, name), f64::max)
-        })
-        .fold(0.0, f64::max)
+        .take(5)
+        .map(|release| mamacine_core::search::relevance(asked, &release.title))
+        .fold(mamacine_core::search::relevance(asked, name), f64::max)
 }
 
 /// The same words, whatever she capitalized and whichever accents she reached for.
@@ -2535,9 +2571,24 @@ mod tests {
                     vec!["gomorra", "gomorrah"],
                     title("2049116", "Gomorrah", None, "2014", true),
                 ),
+                // the film of the same name, offered after the series: "gomorra" means the show
+                (
+                    vec!["gomorra", "gomorrah"],
+                    title("0929425", "Gomorrah", None, "2008", false),
+                ),
                 (
                     vec!["juego de tronos", "game of thrones"],
                     title("0944947", "Game of Thrones", None, "2011", true),
+                ),
+                (
+                    vec!["el castillo ambulante", "howl's moving castle"],
+                    title(
+                        "0347149",
+                        "El castillo ambulante",
+                        Some("ハウルの動く城"),
+                        "2004",
+                        false,
+                    ),
                 ),
             ]
         }
@@ -2877,7 +2928,7 @@ mod tests {
             "the discard is a line of the story"
         );
         assert!(
-            story.iter().any(|note| note.said.contains("otra versión")),
+            story.iter().any(|note| note.said.contains("otra copia")),
             "and so is the replacement"
         );
     }
@@ -3158,7 +3209,7 @@ mod tests {
         );
         assert_eq!(
             world.orchestrator.tray_report().tooltip,
-            "Mamá Cine · No hay nada descargándose"
+            "Mamá Cine · No se está descargando nada"
         );
         let id = grab_first(&world);
         *world.downloader.rate.lock().expect("not poisoned") = 5 * 1_048_576;
@@ -3441,12 +3492,39 @@ mod tests {
         );
     }
 
-    // The translation is a second question, never a replacement: a provider that answers with the
-    // wrong thing must not be able to take her own words off the table.
+    // She typed the name she knows and the releases are named in another language entirely.
+    // Nothing here reads Japanese, and nothing has to: the show was identified, and the indexer
+    // was asked for the thing rather than for her words.
     #[test]
-    fn her_own_words_are_still_asked_even_when_they_translate_to_something_else() {
+    fn a_film_whose_releases_are_named_in_another_language_is_still_hers() {
         let world = world_with(
-            vec![release("Juego.De.Tronos.T01.1080p.BluRay.ESP", 8.0, 40)],
+            vec![release("Howls.Moving.Castle.2004.1080p.BluRay-X", 8.0, 300)],
+            200 * GIGABYTE,
+        );
+        let found = world
+            .orchestrator
+            .search("el castillo ambulante", None, None)
+            .expect("results");
+
+        assert_eq!(found.films.len(), 1, "the film she asked for");
+        assert!(
+            found.exact,
+            "a title that was identified is not a misspelling"
+        );
+        let asked = world.asked.lock().expect("not poisoned");
+        assert!(
+            asked.contains(&Query::Imdb("0347149".into())),
+            "asked for the film itself, not for the words she reached for it with: {asked:?}"
+        );
+    }
+
+    // Her words go to an indexer only when nothing recognised them. Sending them anyway asks a
+    // second question that answers with the same releases or with noise, and either way it is a
+    // search hit somebody else is paying for.
+    #[test]
+    fn an_identified_title_is_asked_for_instead_of_her_words_not_beside_them() {
+        let world = world_with(
+            vec![release("Game.Of.Thrones.S01.1080p.WEB-DL-PACK", 8.0, 300)],
             200 * GIGABYTE,
         );
         world
@@ -3455,35 +3533,80 @@ mod tests {
             .expect("results");
         let asked = world.asked.lock().expect("not poisoned");
         assert!(
-            asked.iter().any(|question| matches!(
+            !asked.iter().any(|question| matches!(
                 question,
-                Query::Title(text) | Query::Show { name: text, .. } if text == "juego de tronos"
+                Query::Title(text) | Query::Show { name: text, .. } if text.contains("juego")
             )),
-            "what she typed is asked for as she typed it: {asked:?}"
+            "her words were identified, so they are not also asked: {asked:?}"
+        );
+        assert_eq!(
+            asked.len(),
+            1,
+            "the provider said it is a series and no film, so film was not asked either: {asked:?}"
         );
     }
 
-    // Translating costs a call to a title provider and a second one to every indexer. A name that
-    // is already the name releases carry buys nothing with either.
+    // Nothing recognised what she typed, and an empty screen would be the wrong answer while an
+    // indexer can still be asked. Her words are the question of last resort, and what comes back
+    // is judged against them, because a keyword search is free to have misunderstood.
     #[test]
-    fn a_name_that_needs_no_translating_costs_no_extra_question() {
+    fn words_nothing_recognises_are_still_asked_and_still_judged() {
         let world = world_with(
-            vec![release("Game.Of.Thrones.S01.1080p.WEB-DL-PACK", 8.0, 300)],
+            vec![
+                release("Something.Else.Entirely.2020.1080p-X", 4.0, 10),
+                release("Pelicula.Rarisima.2020.1080p-X", 4.0, 10),
+            ],
             200 * GIGABYTE,
         );
-        world
+        let found = world
             .orchestrator
-            .search("game of thrones", None, None)
+            .search("pelicula rarisima", None, None)
             .expect("results");
         let asked = world.asked.lock().expect("not poisoned");
         assert!(
-            asked.iter().all(|question| !matches!(
-                question,
-                Query::Show { ids, .. } if ids.any()
-            )),
-            "nothing was translated, so nothing was identified: {asked:?}"
+            asked.contains(&Query::Title("pelicula rarisima".into())),
+            "her words are the question when nothing else is: {asked:?}"
         );
-        assert_eq!(asked.len(), 2, "one question per category: {asked:?}");
+        assert!(
+            !found.exact,
+            "nothing identified it, so an empty answer may well be her spelling"
+        );
+        assert_eq!(
+            found.films.len(),
+            1,
+            "the indexer was free to free-associate and one of these is not hers"
+        );
+    }
+
+    // "Gomorra" is a film and a series. Both are hers to choose from, and both were asked for by
+    // id, so neither can be the indexer having misunderstood. Which of the two the name means is
+    // still a question, and the provider was asked it: its own order is the answer, and the screen
+    // does not toss a coin over it a second time.
+    #[test]
+    fn the_kind_the_provider_offered_first_is_what_the_name_means() {
+        let world = world_with(
+            vec![
+                release("Gomorrah.S01.1080p.HMAX.WEB-DL.DUAL", 9.0, 300),
+                release("Gomorrah.2008.1080p.BluRay.x264-CiNEFiLE", 9.0, 300),
+            ],
+            200 * GIGABYTE,
+        );
+        let found = world
+            .orchestrator
+            .search("gomorra", None, None)
+            .expect("results");
+        let season = found.seasons.first().expect("the series");
+        let film = found.films.first().expect("the film of the same name");
+        assert_eq!(
+            season.relevance, 3.0,
+            "the series is what the provider offered first"
+        );
+        assert!(
+            film.relevance < season.relevance,
+            "the film of the same name is hers to reach, under the show ({} vs {})",
+            film.relevance,
+            season.relevance
+        );
     }
 
     // The window asks for suggestions on every keystroke, then she presses Buscar. Asking the
@@ -3559,27 +3682,32 @@ mod tests {
             .expect("results");
     }
 
+    // Nothing recognised her words, so an indexer was asked for them and was free to have
+    // misunderstood: what she named must never sit below what merely mentions it.
     #[test]
     fn what_she_named_outranks_what_merely_mentions_it() {
         let world = world_with(
             vec![
-                release("Game of Thrones The Last Watch 1080p", 2.0, 900),
-                release("Game.Of.Thrones.S01.1080p.WEB-DL-PACK", 8.0, 300),
+                release("Das Boot The Making Of 1981 1080p", 2.0, 900),
+                release("Das.Boot.1981.1080p.BluRay-X", 8.0, 300),
             ],
             200 * GIGABYTE,
         );
         let found = world
             .orchestrator
-            .search("game of thrones", None, None)
+            .search("das boot", None, None)
             .expect("results");
-        let film = found.films.first().expect("the documentary");
-        let season = found.seasons.first().expect("the season");
-        assert!(
-            season.relevance > film.relevance,
-            "the show she named ({}) must outrank the documentary ({})",
-            season.relevance,
-            film.relevance
-        );
+        let best = found.films.first().expect("the film she named");
+        assert_eq!(best.title, "Das Boot");
+        for other in found.films.iter().skip(1) {
+            assert!(
+                best.relevance > other.relevance,
+                "the film she named ({}) must outrank {} ({})",
+                best.relevance,
+                other.title,
+                other.relevance
+            );
+        }
     }
 
     // The chase spends seconds fetching the next copy; a poll landing in that window used to
@@ -3674,10 +3802,11 @@ mod tests {
             "a probe skip costs nothing, so it spends none of her chase allowance"
         );
         assert!(
-            !entry
-                .story
-                .iter()
-                .any(|note| note.said.contains("saltado") || note.said.contains("servidor")),
+            !entry.story.iter().any(|note| {
+                note.said.contains("descartado")
+                    || note.said.contains("siguiente")
+                    || note.said.contains("servidor")
+            }),
             "seamless: nothing visible changed, so the story says nothing: {:?}",
             entry
                 .story

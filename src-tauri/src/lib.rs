@@ -534,7 +534,7 @@ async fn check_settings(
                     .to_string(),
             );
         } else {
-            lines.push("Subtítulos: sin configurar. La app funciona igualmente.".to_string());
+            lines.push("Subtítulos: sin configurar. La aplicación funciona igual.".to_string());
         }
 
         Ok(lines.join("\n"))
@@ -575,7 +575,7 @@ fn open_with_desktop(path: &str) -> Result<(), String> {
             Ok(Some(status)) if status.success() => return Ok(()),
             Ok(Some(status)) => {
                 return Err(format!(
-                    "El ordenador no ha podido abrirlo (el programa de apertura terminó con código {}).",
+                    "El ordenador no ha podido abrirlo (error {}).",
                     status.code().unwrap_or(-1)
                 ))
             }
@@ -897,7 +897,7 @@ pub fn run() {
                                 .notification()
                                 .builder()
                                 .title("Mamá Cine sigue descargando")
-                                .body("Está en el icono pequeño junto al reloj. Avisará cuando la película esté lista.")
+                                .body("Se queda en el icono pequeño junto al reloj y avisará cuando la película esté lista.")
                                 .show();
                         }
                     });
