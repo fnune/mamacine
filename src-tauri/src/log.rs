@@ -12,6 +12,7 @@ const ROTATE_AT: u64 = 1024 * 1024;
 pub struct Log {
     path: PathBuf,
     lock: Mutex<()>,
+    standing: Mutex<std::collections::HashMap<String, String>>,
 }
 
 impl Log {
@@ -19,6 +20,7 @@ impl Log {
         Log {
             path: Log::path_in(directory),
             lock: Mutex::new(()),
+            standing: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -41,6 +43,29 @@ impl Log {
     /// prefix: whoever reads the file has to be able to tell who said what.
     pub fn from(&self, who: &str, text: &str) {
         self.line(&format!("[{who}] {text}"));
+    }
+
+    /// Said once, and not again until it changes.
+    ///
+    /// What is polled once a second fails once a second, and the day the downloader was closed
+    /// out from under the app the same sentence was written a thousand times, which is a
+    /// megabyte, which is the whole log: every line explaining how it got there was rotated
+    /// away by the complaint about it. `subject` is what is being watched, not what is wrong.
+    pub fn standing(&self, subject: &str, text: &str) {
+        {
+            let mut standing = self.standing.lock().expect("not poisoned");
+            if standing.get(subject).is_some_and(|said| said == text) {
+                return;
+            }
+            standing.insert(subject.to_string(), text.to_string());
+        }
+        self.line(text);
+    }
+
+    /// Whatever was wrong with this is over, so the next thing that goes wrong with it is worth
+    /// saying even if it is the same thing.
+    pub fn settled(&self, subject: &str) {
+        self.standing.lock().expect("not poisoned").remove(subject);
     }
 
     /// Never fails outward: logging must not be able to break the thing it describes.
@@ -117,6 +142,37 @@ mod tests {
         assert_eq!(written.lines().count(), 2);
         // every line carries a date she could read a week later
         assert!(written.starts_with("20"), "{written}");
+    }
+
+    // The downloader was closed out from under a running app, and the once-a-second poll wrote
+    // the same sentence about it until the megabyte was full and every line that said how it got
+    // there had been rotated away. The complaint ate its own explanation.
+    #[test]
+    fn a_complaint_that_repeats_every_second_is_written_once() {
+        let directory = std::env::temp_dir().join("mama-cine-log-standing");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let log = Log::open(&directory);
+
+        for _ in 0..100 {
+            log.standing("progress", "cannot reach the downloader");
+        }
+        log.standing("progress", "the downloader refused the account");
+        log.standing("disk", "cannot reach the downloader");
+
+        let written = std::fs::read_to_string(directory.join("mamacine.log")).expect("the file");
+        assert_eq!(
+            written.lines().count(),
+            3,
+            "the same thing once, a different thing, and the same thing about something else: \
+             {written}"
+        );
+
+        // it came back and went wrong again, and that is news
+        log.settled("progress");
+        log.standing("progress", "the downloader refused the account");
+        let written = std::fs::read_to_string(directory.join("mamacine.log")).expect("the file");
+        assert_eq!(written.lines().count(), 4, "{written}");
     }
 
     #[test]

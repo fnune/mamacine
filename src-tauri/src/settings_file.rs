@@ -398,8 +398,33 @@ fn beside_the_app(places: &[PathBuf], name: &str) -> PathBuf {
         .iter()
         .map(|directory| directory.join(&filename))
         .find(|path| path.exists())
+        .map(as_windows_writes_it)
         // in development they come from the shell, and PATH is the right place to look
         .unwrap_or_else(|| PathBuf::from(name))
+}
+
+/// The drive letter spelled plainly, never `\\?\C:\...`.
+///
+/// Tauri answers with the verbatim form, and the verbatim form is a trap rather than a nicety:
+/// these paths are written into nzbget's config, and nzbget puts `\\?\` in front of any path it
+/// judges too long for the old limit. Given one that already carries the prefix it reads the two
+/// leading backslashes as a network share and builds `\\?\UNC\?\C:\...`, which names nothing.
+/// Her paths are short enough today that it does not fire, and that is the whole danger of it.
+fn as_windows_writes_it(path: PathBuf) -> PathBuf {
+    let Some(rest) = path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) else {
+        return path;
+    };
+    // a verbatim share is `\\?\UNC\server\share`, and dropping the prefix off one of those
+    // leaves behind something that is not a path at all
+    let letters = rest.as_bytes();
+    let names_a_drive = letters.len() >= 3
+        && letters[0].is_ascii_alphabetic()
+        && letters[1] == b':'
+        && letters[2] == b'\\';
+    if names_a_drive {
+        return PathBuf::from(rest);
+    }
+    path
 }
 
 #[cfg(test)]
@@ -419,6 +444,30 @@ mod tests {
             beside_the_app(&places, "nzbget"),
             directory.join(&filename),
             "the one that travels with the app wins over whatever is on the PATH"
+        );
+    }
+
+    // These go into nzbget's config, and nzbget lengthens a path it thinks is too long by
+    // putting `\\?\` in front of it. Handed one that already has the prefix it reads the two
+    // backslashes as a machine name on the network.
+    #[test]
+    fn a_drive_letter_is_written_the_way_the_rest_of_windows_writes_it() {
+        assert_eq!(
+            as_windows_writes_it(PathBuf::from(r"\\?\C:\Users\María Esther\unrar.exe")),
+            PathBuf::from(r"C:\Users\María Esther\unrar.exe")
+        );
+        assert_eq!(
+            as_windows_writes_it(PathBuf::from(r"C:\Users\María Esther\unrar.exe")),
+            PathBuf::from(r"C:\Users\María Esther\unrar.exe")
+        );
+        assert_eq!(
+            as_windows_writes_it(PathBuf::from(r"\\?\UNC\casa\peliculas\unrar.exe")),
+            PathBuf::from(r"\\?\UNC\casa\peliculas\unrar.exe"),
+            "a share named this way is left alone: the prefix is the only thing holding it up"
+        );
+        assert_eq!(
+            as_windows_writes_it(PathBuf::from("/usr/bin/unrar")),
+            PathBuf::from("/usr/bin/unrar")
         );
     }
 

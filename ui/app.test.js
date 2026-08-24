@@ -522,16 +522,26 @@ test('downloading asks for the film that was opened', async () => {
   assert.equal(grab.args.series, false);
 });
 
-test('a film being downloaded takes over the screen straight away', async () => {
-  const app = start();
+// The ficha is the page about this film. Pressing the button that is about it used to swap it
+// for a screen of machinery, so what she was reading — what it is, what it is about — went away
+// at the moment she acted on it, and one film had two places to be looked at.
+test('starting a download leaves her on the ficha, with the copy coming down beneath it', async () => {
+  const app = start({ synopsis: 'Una niña y su padre en el norte.' });
   await searchFor(app, 'el sur');
   click(app, app.document.querySelector('#results .film'));
   await settle();
   click(app, app.document.getElementById('download'));
   await settle();
 
-  assert.equal(app.document.getElementById('screen-film').hidden, false);
-  assert.equal(app.document.getElementById('now-title').textContent, 'El Sur');
+  const screen = app.document.getElementById('screen-detail');
+  assert.ok(screen, 'she is still on the ficha');
+  assert.match(app.document.getElementById('synopsis').textContent, /Una niña y su padre/,
+    'and what the film is about is still on it');
+  assert.ok(app.document.getElementById('detail-status'),
+    'the band below says what the copy is doing');
+  assert.ok([...screen.querySelectorAll('button')]
+    .some((button) => button.textContent.includes('Cancelar')),
+  'and offers the only decision left');
 });
 
 test('a search that fails says so instead of throwing', async () => {
@@ -849,14 +859,36 @@ test('a settled download is retired by walking away from it', async () => {
       attempt: 1, attempts_total: 1, untried: 0, story: [] },
   ];
   await app.poll();
-  assert.match(app.document.getElementById('now-status').textContent, /Lista para ver/);
-  assert.match(app.document.querySelector('nav button[data-screen="film"]').textContent,
-    /Lista/, 'the pill says so too');
-
-  click(app, app.document.querySelector('nav button[data-screen="search"]'));
-  await settle();
+  // a copy that arrived is a film on her shelf, not a screen congratulating her about it
+  assert.ok(!app.document.getElementById('screen-film'),
+    'the screen goes where the film now is');
+  assert.equal(app.calls.filter((call) => call.command === 'library_synopsis').length, 1,
+    'and that is her own copy of it, opened');
   assert.ok(!app.document.querySelector('nav button[data-screen="film"]'),
-    'seen and left behind: the pill retires with it');
+    'the pill retires with it, rather than riding the masthead finished');
+});
+
+// She was somewhere else when it landed. The notification already told her, and taking the
+// screen out from under her to say it again is the app interrupting to repeat itself.
+test('a download that lands while she is elsewhere does not take the screen', async () => {
+  const app = start({
+    active: [{ id: 7, title: 'El Sur', status: 'downloading', percent: 90, cover_url: null,
+               beneath: '', speed: '', year: '1983', series: false }],
+  });
+  await app.poll();
+  click(app, app.document.querySelector('nav button[data-screen="library"]'));
+  await settle();
+
+  app.live.active = [];
+  app.live.finished = [
+    { id: 7, title: 'El Sur', ok: true, retrying: false, next_id: null, detail: '',
+      subtitle_note: '', cover_url: null, year: '1983', languages: {}, series: false,
+      attempt: 1, attempts_total: 1, untried: 0, story: [] },
+  ];
+  await app.poll();
+
+  assert.ok(app.document.getElementById('screen-library'), 'she is where she was');
+  assert.equal(app.calls.filter((call) => call.command === 'library_synopsis').length, 0);
 });
 
 // The space her question deserves: what the film is about, where its page is. Both are garnish
@@ -977,7 +1009,7 @@ test('a copy that turns out to be dead is followed to the next one', async () =>
   await settle();
   await app.poll();
 
-  const screen = app.document.getElementById('screen-film');
+  const screen = app.document.getElementById('screen-detail');
   assert.match(screen.textContent, /Descargando/, 'it is still going');
   assert.ok(!/no he podido/i.test(screen.textContent), 'nothing has failed yet');
   // "Copia 2 de 4" was bookkeeping: a count she cannot use, that changed while she read it
@@ -1006,7 +1038,7 @@ test('a failure the app has not answered yet reads as searching, not as the end'
   await settle();
   await app.poll();
 
-  const status = app.document.getElementById('now-status').textContent;
+  const status = app.document.getElementById('detail-status').textContent;
   assert.match(status, /Buscando otra copia/, status);
   assert.ok(!/No he podido/.test(status), 'the flash of false failure is the old bug');
 });
@@ -1041,7 +1073,7 @@ test('a dead copy empties the bar once, as the words change', async () => {
   await settle();
   await dead.poll();
 
-  assert.match(dead.document.getElementById('now-status').textContent, /Buscando otra copia/);
+  assert.match(dead.document.getElementById('detail-status').textContent, /Buscando otra copia/);
   assert.match(dead.document.querySelector('.bar i').getAttribute('style'), /width: 0%/,
     'the bar empties with the words, not later');
 });
@@ -1063,7 +1095,7 @@ test('a retry that is waiting for the server says so', async () => {
   await settle();
   await app.poll();
 
-  assert.match(app.document.getElementById('now-status').textContent, /Esperando/);
+  assert.match(app.document.getElementById('detail-status').textContent, /Esperando/);
   assert.match(app.document.getElementById('problem').textContent, /sigo intentando/);
 });
 
@@ -1085,7 +1117,7 @@ test('the give-up sentence is not said twice above the fold', async () => {
   await settle();
   await app.poll();
 
-  const screen = app.document.getElementById('screen-film');
+  const screen = app.document.getElementById('screen-detail');
   const outsideTheFold = screen.textContent.replace(
     app.document.querySelector('.story')?.textContent ?? '', '');
   const times = outsideTheFold.split('la única copia que había').length - 1;
@@ -1107,7 +1139,7 @@ test('when every copy has been tried it says so once, and stops', async () => {
   await settle();
   await app.poll();
 
-  const screen = app.document.getElementById('screen-film');
+  const screen = app.document.getElementById('screen-detail');
   assert.match(screen.textContent, /No he podido conseguirla/);
   assert.match(screen.textContent, /estaban estropeadas/);
   assert.ok(!app.document.getElementById('try-more'),
@@ -1137,7 +1169,7 @@ test('a give-up with copies left offers to try them, and follows the new attempt
   await settle();
 
   assert.equal(app.calls.find((call) => call.command === 'try_more').args.id, 7);
-  assert.match(app.document.getElementById('now-status').textContent, /Buscando otra copia/,
+  assert.match(app.document.getElementById('detail-status').textContent, /Buscando otra copia/,
     'the screen follows the new attempt instead of staying on the corpse');
 });
 
@@ -1475,12 +1507,17 @@ test('choosing another copy downloads that copy', async () => {
   await searchFor(app, 'el sur');
   click(app, app.document.querySelector('#results .film'));
   await settle();
-  press(app, '.actions button', 'Otras copias');
+  click(app, app.document.getElementById('show-copies'));
   await settle();
 
   const copies = app.document.querySelectorAll('.version');
   assert.ok(copies.length > 1, 'there is something to choose between');
-  click(app, copies[1]);
+  // the row was the button, so nothing said that touching a line of text spends an hour of her
+  // connection; the button says it, and the row is a row
+  const pick = copies[1].querySelector('button.pick');
+  assert.ok(pick, 'each copy carries the button that starts it');
+  assert.match(pick.textContent, /Descargar esta copia/);
+  click(app, pick);
   await settle();
   assert.equal(app.calls.find((call) => call.command === 'grab').args.version, 1);
 });

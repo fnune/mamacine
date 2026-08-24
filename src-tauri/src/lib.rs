@@ -149,9 +149,16 @@ async fn grab(
     index: usize,
     version: Option<usize>,
     series: bool,
+    replacing: Option<i64>,
 ) -> Result<Grabbed, String> {
     let app = app.inner().clone();
-    off_thread(move || app.orchestrator()?.grab(index, version, series)).await
+    off_thread(move || app.orchestrator()?.grab(index, version, series, replacing)).await
+}
+
+#[tauri::command]
+async fn copies(app: State<'_, Arc<App>>, id: i64) -> Result<orchestrator::Copies, String> {
+    let app = app.inner().clone();
+    off_thread(move || app.orchestrator()?.copies_of(id)).await
 }
 
 #[tauri::command]
@@ -780,6 +787,7 @@ fn build_runtime(handle: &tauri::AppHandle, app: &App) -> Result<Runtime, String
         library: Arc::clone(&app.library),
         log: Arc::clone(&app.log),
         language: settings.subtitles.language.clone(),
+        remover: Arc::new(orchestrator::SystemRemover),
         notify: notify(handle.clone()),
     });
 
@@ -1002,6 +1010,7 @@ pub fn run() {
             play_episode,
             reveal,
             remove_film,
+            copies,
             fetch_subtitles,
             cover,
             synopsis,

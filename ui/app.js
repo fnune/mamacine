@@ -323,6 +323,69 @@ function Search({ state, actions }) {
     </section>`;
 }
 
+// One film, one page, whichever way she arrived at it. It knows nothing about where its facts
+// came from: the two routes below fetch them and hand them over. Search and Mi colección used to
+// be separate pages that had drifted apart, and the one reached from a search could not tell her
+// a thing about the copy she already had.
+function FilmPage({
+  screenId, titleId, synopsisId, bandId,
+  cover, title, factline, synopsis, bad, facts, actions, copies, children,
+}) {
+  return html`
+    <section class="screen split" id=${screenId}>
+      <div class="scroll">
+        <div class="now">
+          <${Poster} url=${cover} alt=${title} />
+          <div class="detail">
+            <h1 id=${titleId}>${title}</h1>
+            <p class="factline">${factline}</p>
+            ${synopsis && html`<p class="synopsis" id=${synopsisId}>${synopsis}</p>`}
+            ${children}
+          </div>
+        </div>
+      </div>
+      <div class="band decision ${bad ? 'bad' : ''}" id=${bandId}>
+        <div class="facts">${facts}</div>
+        <div class="actions">${actions}</div>
+        ${copies && html`<${Copies} ...${copies} />`}
+      </div>
+    </section>`;
+}
+
+// The copies, each with the button that starts it. The row itself was the button, so nothing on
+// the screen said that touching a line of text would spend an hour of her connection — and when
+// it did start, the list sat there unchanged while the masthead already knew.
+function Copies({ versions, open, onToggle, verb, onPick, confirming, onConfirm, onDismiss,
+                  loading, problem, more }) {
+  if (!open) {
+    return more && html`
+      <div class="versions">
+        <button class="quiet" id="show-copies" onClick=${onToggle}>${more}</button>
+      </div>`;
+  }
+  return html`
+    <div class="versions" id="copies">
+      ${more && html`<button class="quiet" id="show-copies" onClick=${onToggle}>Ocultar las copias</button>`}
+      ${loading && html`<p class="factline" id="copies-waiting">Buscando otras copias…</p>`}
+      ${problem && html`<${Notice} notice=${{ text: problem, bad: true }} />`}
+      ${(versions || []).map((version) => html`
+        <div class="version" key=${version.index} title=${version.name}>
+          <span class="what">${version.quality} · ${version.size}</span>
+          <span class="who">${version.language} · ${version.grabs} descargas</span>
+          ${version.chosen && html`<span class="mark">la elegida</span>`}
+          ${confirming === version.index
+            ? html`<span class="confirm">
+                <span class="word">¿Cambiar la copia?</span>
+                <button class="quiet bad" onClick=${() => onConfirm(version)}>Sí, cambiar</button>
+                <button class="quiet" onClick=${onDismiss}>No</button>
+              </span>`
+            : html`<button class="primary pick" onClick=${() => onPick(version)}>${verb}</button>`}
+        </div>`)}
+    </div>`;
+}
+
+// Search, then a film. The facts come from the live result list, so this route is the one that
+// can offer copies without asking anybody for a handle first.
 function Detail({ state, actions }) {
   const item = state.detail;
   if (!item) return null;
@@ -336,113 +399,146 @@ function Detail({ state, actions }) {
   // over five times is not a list she can read
   const oneSeason = new Set(episodes.map((episode) => episode.season)).size === 1;
   const named = oneSeason ? episodes.filter((episode) => episode.title) : [];
+  const coming = comingDown(state);
+  const failed = coming?.status === 'failed';
+  const shown = coming?.status === 'retrying' && state.problem ? 'waiting' : coming?.status;
 
-  // The ficha fills the screen and scrolls; the decision waits in the band, pinned below it.
-  return html`
-    <section class="screen split" id="screen-detail">
-      <div class="scroll">
-        <div class="now">
-          <${Poster} url=${item.cover_url} alt=${item.title || item.show} />
-          <div class="detail">
-            <h1 id="detail-title">${series ? `${item.show} · ${item.label}` : item.title}</h1>
-            <p class="factline">${series
-              ? 'Temporada completa'
-              : [item.year, item.about].filter(Boolean).join(' · ')}</p>
-            ${state.synopsis && html`<p class="synopsis" id="synopsis">${state.synopsis}</p>`}
-            ${series && !have && html`<p class="factline">
-              ${episodes.length > 0
-                ? `Son ${episodes.length} episodios.`
-                : 'Son varios episodios.'} Cuando termine la descarga, podrás verlos aquí,
-              uno a uno.</p>`}
-            ${named.length > 0 && html`
-              <ol class="episode-names" id="episode-names">
-                ${named.map((episode) => html`
-                  <li key=${`${episode.season}-${episode.number}`}>
-                    <span class="which">${episode.number}</span> ${episode.title}
-                  </li>`)}
-              </ol>`}
-            ${item.imdb && html`
-              <button class="quiet" onClick=${() => invoke(series ? 'open_imdb_season' : 'open_imdb', { index: item.index }).catch(actions.tell('notice'))}>
-                ${series ? 'Ver los episodios en IMDb' : 'Ver la ficha en IMDb'}
-              </button>`}
-            <${Notice} notice=${state.notice} />
-          </div>
-        </div>
-      </div>
-      <div class="band decision" id="detail-band">
-        <div class="facts">
-          ${have
-            ? html`<p class="chosen" id="already">Ya tienes ${thing} en este ordenador.</p>`
-            : state.downloadingId
-            ? html`<p class="chosen" id="already-downloading">Ya se está descargando.</p>`
-            : html`<${Fragment}>
-                ${chosen && html`
-                  <div class="fact-row">
-                    <p class="room" id="room">
-                      ${[`Ocupa ${chosen.size}`, timeWords(chosen.minutes)]
-                        .filter(Boolean).join(' · ')}
-                    </p>
-                    ${disk.total_bytes > 0 && html`
-                      <p class="room-disk" id="room-disk">
-                        <${Meter} free=${disk.free_bytes} total=${disk.total_bytes}
-                                  slice=${chosen.size_bytes} low=${chosen.room !== 'fits'} />
-                        <span>quedan ${disk.free_space} libres</span>
-                      </p>`}
-                  </div>`}
-                ${chosen && chosen.room !== 'fits' && html`
-                  <p class="room bad" id="room-warning">
-                    ${chosen.room === 'no' ? 'No hay sitio suficiente' : 'Puede que no quepa'}:
-                    mientras se descarga y se prepara, necesita unos ${chosen.needs}.
-                  </p>`}
-                ${chosen && html`
-                  <p class="chosen" id="what-comes">
-                    Se descargará en ${`${midSentence(chosen.quality)}, ${midSentence(chosen.language)}`}
-                  </p>`}
-              <//>`}
-        </div>
-
-        <div class="actions">
-          ${have
-            ? html`<${Fragment}>
-                ${!series && html`
-                  <button class="primary" onClick=${() => invoke('play', { id: have }).catch(actions.tell('notice'))}>
-                    Ver la película
-                  </button>`}
-                ${series && html`
-                  <button class="primary" onClick=${() => actions.openOwned(have)}>
-                    Ver los episodios
-                  </button>`}
-              <//>`
-            : state.downloadingId
-            ? html`
-              <button class="primary" id="watch-download"
-                      onClick=${() => actions.watchDownload(state.downloadingId)}>
-                Ver cómo va
-              </button>`
-            : html`
-              <button class="primary" id="download" onClick=${() => actions.download()}>
-                Descargar
-              </button>`}
-          ${(state.versions || []).length > 1 && html`
-            <button class="quiet" onClick=${actions.toggleVersions}>
-              ${state.showVersions
-                ? 'Ocultar las copias'
-                : `Otras copias (${state.versions.length - 1})`}
-            </button>`}
-        </div>
-
-        ${state.showVersions && html`
-          <div class="versions">
-            ${(state.versions || []).map((version) => html`
-              <button class="version" key=${version.index} title=${version.name}
-                      onClick=${() => actions.download(version.index)}>
-                <span class="what">${version.quality} · ${version.size}</span>
-                <span class="who">${version.language} · ${version.grabs} descargas</span>
-                ${version.chosen && html`<span class="mark">la elegida</span>`}
-              </button>`)}
+  const facts = have
+    ? html`<p class="chosen" id="already">Ya tienes ${thing} en este ordenador.</p>`
+    : coming
+    ? html`<${Progress} coming=${coming} shown=${shown} failed=${failed} id="detail-status" />`
+    // started somewhere else and not yet in the live list: still not something to offer again
+    : state.downloadingId
+    ? html`<p class="chosen" id="already-downloading">Ya se está descargando.</p>`
+    : html`<${Fragment}>
+        ${chosen && html`
+          <div class="fact-row">
+            <p class="room" id="room">
+              ${[`Ocupa ${chosen.size}`, timeWords(chosen.minutes)].filter(Boolean).join(' · ')}
+            </p>
+            ${disk.total_bytes > 0 && html`
+              <p class="room-disk" id="room-disk">
+                <${Meter} free=${disk.free_bytes} total=${disk.total_bytes}
+                          slice=${chosen.size_bytes} low=${chosen.room !== 'fits'} />
+                <span>quedan ${disk.free_space} libres</span>
+              </p>`}
           </div>`}
-      </div>
-    </section>`;
+        ${chosen && chosen.room !== 'fits' && html`
+          <p class="room bad" id="room-warning">
+            ${chosen.room === 'no' ? 'No hay sitio suficiente' : 'Puede que no quepa'}:
+            mientras se descarga y se prepara, necesita unos ${chosen.needs}.
+          </p>`}
+        ${chosen && html`
+          <p class="chosen" id="what-comes">
+            Se descargará en ${`${midSentence(chosen.quality)}, ${midSentence(chosen.language)}`}
+          </p>`}
+      <//>`;
+
+  const buttons = have
+    ? html`<${Fragment}>
+        ${!series && html`
+          <button class="primary" onClick=${() => invoke('play', { id: have }).catch(actions.tell('notice'))}>
+            Ver la película
+          </button>`}
+        ${series && html`
+          <button class="primary" onClick=${() => actions.openOwned(have)}>
+            Ver los episodios
+          </button>`}
+      <//>`
+    : coming
+    ? html`<${DownloadActions} coming=${coming} failed=${failed} actions=${actions} />`
+    : state.downloadingId
+    ? html`
+      <button class="primary" id="watch-download"
+              onClick=${() => actions.watchDownload(state.downloadingId)}>
+        Ver cómo va
+      </button>`
+    : html`
+      <button class="primary" id="download" onClick=${() => actions.download()}>
+        Descargar
+      </button>`;
+
+  return html`
+    <${FilmPage}
+      screenId="screen-detail" titleId="detail-title" synopsisId="synopsis" bandId="detail-band"
+      cover=${item.cover_url} title=${series ? `${item.show} · ${item.label}` : item.title}
+      factline=${series ? 'Temporada completa'
+                        : [item.year, item.about].filter(Boolean).join(' · ')}
+      synopsis=${state.synopsis} bad=${failed} facts=${facts} actions=${buttons}
+      copies=${copiesProps(state, actions, state.versions, have)}>
+      ${series && !have && html`<p class="factline">
+        ${episodes.length > 0 ? `Son ${episodes.length} episodios.` : 'Son varios episodios.'}
+        Cuando termine la descarga, podrás verlos aquí, uno a uno.</p>`}
+      ${named.length > 0 && html`
+        <ol class="episode-names" id="episode-names">
+          ${named.map((episode) => html`
+            <li key=${`${episode.season}-${episode.number}`}>
+              <span class="which">${episode.number}</span> ${episode.title}
+            </li>`)}
+        </ol>`}
+      ${item.imdb && html`
+        <button class="quiet" onClick=${() => invoke(series ? 'open_imdb_season' : 'open_imdb', { index: item.index }).catch(actions.tell('notice'))}>
+          ${series ? 'Ver los episodios en IMDb' : 'Ver la ficha en IMDb'}
+        </button>`}
+      <${Notice} notice=${state.notice} />
+    <//>`;
+}
+
+// The copy coming down, when it is the one this page is about. It is shown the moment she picks
+// it rather than when the downloader answers: the masthead changed instantly and the copies list
+// sat there for seconds looking like nothing had happened.
+function comingDown(state) {
+  if (!state.watching) return null;
+  if (state.starting) return state.watching;
+  return state.watching.id === state.downloadingId ? state.watching : null;
+}
+
+function Progress({ coming, shown, failed, id }) {
+  const beneath = [coming.detail || '', coming.beneath, coming.speed].filter(Boolean).join(' · ');
+  return html`
+    <${Fragment}>
+      <p class="status ${failed ? 'bad failed' : 'working'}" id=${id}>
+        ${STATUS_WORDS[shown] || 'Trabajando…'}
+        ${coming.status === 'downloading' && ` ${Math.round(coming.percent || 0)} %`}
+      </p>
+      <div class="bar"><i style=${`width: ${coming.percent || 0}%`}></i></div>
+      <p class="beneath">${beneath}</p>
+    <//>`;
+}
+
+function DownloadActions({ coming, failed, actions }) {
+  return html`
+    <${Fragment}>
+      ${failed && coming.untried > 0 && html`
+        <button class="primary" id="try-more" onClick=${() => actions.tryMore(coming.id)}>
+          Probar más copias (quedan ${coming.untried})
+        </button>`}
+      ${!failed && coming.id && html`
+        <button class="quiet" onClick=${() => actions.cancel(coming.id)}>
+          Cancelar la descarga
+        </button>`}
+    <//>`;
+}
+
+// What the copies fold needs, from wherever the copies came from. Swapping a copy she already
+// has is the one that asks first: it ends with a film of hers in the papelera.
+function copiesProps(state, actions, versions, owned) {
+  const list = versions || [];
+  if (!list.length) return null;
+  return {
+    versions: state.showVersions ? list : [],
+    open: state.showVersions,
+    onToggle: actions.toggleVersions,
+    verb: owned ? 'Cambiar a esta copia' : 'Descargar esta copia',
+    // swapping ends with a film of hers in the papelera, so that one is asked first
+    onPick: (version) => (owned
+      ? actions.confirmSwap(version.index)
+      : actions.download(version.index)),
+    confirming: state.confirmSwap,
+    onConfirm: (version) => actions.download(version.index, owned),
+    onDismiss: () => actions.confirmSwap(null),
+    more: state.showVersions ? 'Ocultar las copias' : `Otras copias (${list.length})`,
+  };
 }
 
 function Now({ state, actions }) {
@@ -584,9 +680,9 @@ function Subtitles({ said, ok, working, onFind }) {
     </p>`;
 }
 
-// Everything she owns has a page of its own, the way it does in the players she already knows:
-// what it is, what it is about, and one big button that plays it. A card in the grid decides
-// nothing; it opens this.
+// Mi colección, then a film. The facts are what is on the disk, so this route opens with no
+// question asked of anything outside this computer; the copies are fetched only if she asks for
+// them, because a film of hers has to open when the indexer is down.
 function Owned({ state, actions }) {
   const film = (state.progress.shelf || []).find((item) => item.id === state.ownedId);
   if (!film) {
@@ -597,70 +693,91 @@ function Owned({ state, actions }) {
   }
   const episodes = state.ownedEpisodes || [];
   const first = episodes[0];
-  const spoken = spokenIn(film);
+  // the copy she swapped to, coming down under the film it is replacing: she stays where she
+  // was, and the one she has keeps playing until the new one is really here
+  const coming = comingDown(state);
+  const failed = coming?.status === 'failed';
+  const shown = coming?.status === 'retrying' && state.problem ? 'waiting' : coming?.status;
+
+  const facts = coming
+    ? html`<${Progress} coming=${coming} shown=${shown} failed=${failed} id="owned-status" />`
+    : html`
+      <${Subtitles} said=${subtitleState(film)} ok=${hasSpanishSubtitles(film)}
+                    working=${state.findingSubtitles}
+                    onFind=${() => actions.refetchSubtitles(film)} />`;
+
+  const buttons = html`
+    <${Fragment}>
+      ${!film.series && html`
+        <button class="primary play" id="play" onClick=${() => actions.play(film)}>
+          <span aria-hidden="true">▶</span> Ver la película
+        </button>`}
+      ${film.series && first && html`
+        <button class="primary play" id="play-first" onClick=${() => actions.openEpisode(0)}>
+          <span aria-hidden="true">▶</span> ${first.number
+            ? `Empezar por el episodio ${first.number}`
+            : 'Empezar por el primero'}
+        </button>`}
+      <button class="quiet" onClick=${() => actions.reveal(film)}>Abrir la carpeta</button>
+      ${state.confirmRemove === film.id
+        ? html`<span class="confirm">
+            <span class="word">¿Seguro?</span>
+            <button class="quiet bad" onClick=${() => actions.remove(film)}>Sí, borrar</button>
+            <button class="quiet" onClick=${() => actions.confirmRemove(null)}>No</button>
+          </span>`
+        : html`<button class="quiet" id="remove"
+                       onClick=${() => actions.confirmRemove(film.id)}>Borrar</button>`}
+    <//>`;
+
   return html`
-    <section class="screen split" id="screen-owned">
-      <div class="scroll">
-        <div class="now">
-          <${Poster} url=${film.cover_url} alt=${film.title} />
-          <div class="detail">
-            <h1 id="owned-title">${film.title}</h1>
-            <p class="factline">${[film.series ? 'Temporada completa' : film.year, spoken]
-              .filter(Boolean).join(' · ')}</p>
-            ${state.ownedSynopsis && html`
-              <p class="synopsis" id="owned-synopsis">${state.ownedSynopsis}</p>`}
-            ${film.series && html`
-              <div class="episodes" id="episodes">
-                ${episodes.map((episode, position) => html`
-                  <button class="episode" key=${position}
-                          onClick=${() => actions.openEpisode(position)}>
-                    <span class="which">${episode.number ?? position + 1}</span>
-                    <span class="what">
-                      <span class="name">${episode.title || episode.label}</span>
-                      ${episode.title && html`<span class="meta">${episode.label}</span>`}
-                    </span>
-                    ${!episode.subtitles && html`<span class="without">sin subtítulos</span>`}
-                    <span class="go" aria-hidden="true">→</span>
-                  </button>`)}
-                ${state.ownedEpisodes === null && html`
-                  <p class="factline" id="episodes-waiting">Buscando los episodios…</p>`}
-                ${episodes.length === 0 && state.ownedEpisodes !== null && html`
-                  <p class="factline">En esta carpeta no queda ningún episodio.</p>`}
-              </div>`}
-            <${Notice} notice=${state.shelfNotice} />
-          </div>
-        </div>
-      </div>
-      <div class="band decision" id="owned-band">
-        <div class="facts">
-          <${Subtitles} said=${subtitleState(film)} ok=${hasSpanishSubtitles(film)}
-                        working=${state.findingSubtitles}
-                        onFind=${() => actions.refetchSubtitles(film)} />
-        </div>
-        <div class="actions">
-          ${!film.series && html`
-            <button class="primary play" id="play" onClick=${() => actions.play(film)}>
-              <span aria-hidden="true">▶</span> Ver la película
-            </button>`}
-          ${film.series && first && html`
-            <button class="primary play" id="play-first" onClick=${() => actions.openEpisode(0)}>
-              <span aria-hidden="true">▶</span> ${first.number
-                ? `Empezar por el episodio ${first.number}`
-                : 'Empezar por el primero'}
-            </button>`}
-          <button class="quiet" onClick=${() => actions.reveal(film)}>Abrir la carpeta</button>
-          ${state.confirmRemove === film.id
-            ? html`<span class="confirm">
-                <span class="word">¿Seguro?</span>
-                <button class="quiet bad" onClick=${() => actions.remove(film)}>Sí, borrar</button>
-                <button class="quiet" onClick=${() => actions.confirmRemove(null)}>No</button>
-              </span>`
-            : html`<button class="quiet" id="remove"
-                           onClick=${() => actions.confirmRemove(film.id)}>Borrar</button>`}
-        </div>
-      </div>
-    </section>`;
+    <${FilmPage}
+      screenId="screen-owned" titleId="owned-title" synopsisId="owned-synopsis"
+      bandId="owned-band"
+      cover=${film.cover_url} title=${film.title}
+      factline=${[film.series ? 'Temporada completa' : film.year, spokenIn(film)]
+        .filter(Boolean).join(' · ')}
+      synopsis=${state.ownedSynopsis} bad=${failed} facts=${facts} actions=${buttons}
+      copies=${ownedCopies(state, actions)}>
+      ${film.series && html`
+        <div class="episodes" id="episodes">
+          ${episodes.map((episode, position) => html`
+            <button class="episode" key=${position}
+                    onClick=${() => actions.openEpisode(position)}>
+              <span class="which">${episode.number ?? position + 1}</span>
+              <span class="what">
+                <span class="name">${episode.title || episode.label}</span>
+                ${episode.title && html`<span class="meta">${episode.label}</span>`}
+              </span>
+              ${!episode.subtitles && html`<span class="without">sin subtítulos</span>`}
+              <span class="go" aria-hidden="true">→</span>
+            </button>`)}
+          ${state.ownedEpisodes === null && html`
+            <p class="factline" id="episodes-waiting">Buscando los episodios…</p>`}
+          ${episodes.length === 0 && state.ownedEpisodes !== null && html`
+            <p class="factline">En esta carpeta no queda ningún episodio.</p>`}
+        </div>`}
+      <${Notice} notice=${state.shelfNotice} />
+    <//>`;
 }
+
+// Her own film's copies: never fetched until she asks, and the fold's own button is what asks.
+function ownedCopies(state, actions) {
+  const copies = state.copies;
+  return {
+    versions: copies?.versions || [],
+    open: state.showCopies,
+    onToggle: actions.toggleCopies,
+    verb: 'Cambiar a esta copia',
+    onPick: (version) => actions.confirmSwap(version.index),
+    confirming: state.confirmSwap,
+    onConfirm: (version) => actions.swapCopy(version.index),
+    onDismiss: () => actions.confirmSwap(null),
+    loading: state.loadingCopies,
+    problem: state.copiesProblem,
+    more: state.showCopies ? 'Ocultar las copias' : 'Ver otras copias',
+  };
+}
+
 
 // One episode, with the same page a film gets: what it is called, what happens in it, and the
 // button that plays it. A row in a list that plays something the moment it is touched never said
@@ -885,6 +1002,14 @@ function App() {
     downloadingId: null,
     versions: null,
     showVersions: false,
+    // her own film's copies, and the fold that asks for them
+    copies: null,
+    showCopies: false,
+    loadingCopies: false,
+    copiesProblem: null,
+    confirmSwap: null,
+    // a copy she has just picked, before the downloader has answered with its id
+    starting: false,
     watching: null,
     ownedId: null,
     ownedEpisodes: null,
@@ -951,11 +1076,14 @@ function App() {
 
       const now = latest.current;
       let watching = now.watching;
+      let downloadingId = now.downloadingId;
       if (watching?.id) {
         // a copy that failed hands over to the next one; the screen follows it rather than
         // stopping to tell her something she cannot act on
         let landed = progress.finished.find((film) => film.id === watching.id);
         while (landed?.next_id) {
+          // the ficha's own band is following the same chase, so it follows the handover too
+          if (downloadingId === watching.id) downloadingId = landed.next_id;
           // a new copy is a new download: nothing the dead one said about itself still holds
           watching = { ...watching, id: landed.next_id, status: 'retrying', detail: '', percent: 0 };
           landed = progress.finished.find((film) => film.id === landed.next_id);
@@ -985,7 +1113,19 @@ function App() {
           if (chasing) watching = { ...chasing, status: 'retrying', percent: 0 };
         }
       }
-      change({ progress, watching, problem: progress.problem || null });
+      // A copy that arrived is a film on her shelf, not a screen to read about it. If she is
+      // watching it come down, the app goes where the film now is; if she is somewhere else,
+      // the notification has already told her and nothing takes the screen out from under her.
+      if (watching?.status === 'done') {
+        const looking = now.screen === 'film'
+          || (now.screen === 'detail' && downloadingId === watching.id);
+        change({
+          progress, watching: null, downloadingId: null, problem: progress.problem || null,
+        });
+        if (looking) actions.openOwned(watching.id);
+        return;
+      }
+      change({ progress, watching, downloadingId, problem: progress.problem || null });
     };
 
     tick();
@@ -1095,7 +1235,8 @@ function App() {
       change({
         detail: item, detailSeries: series, have: null, downloadingId: null,
         versions: null, showVersions: false, synopsis: '', seasonEpisodes: [],
-        screen: 'detail', notice: null,
+        copies: null, showCopies: false, copiesProblem: null, confirmSwap: null,
+        starting: false, screen: 'detail', notice: null,
       });
       // the synopsis is garnish: without a TMDB key there is none, and the ficha stands without
       // it, so a refusal here changes nothing she can act on
@@ -1120,7 +1261,15 @@ function App() {
       // whether she has it is decided by her folder, not by what a downloader remembers
       try {
         const owned = await invoke('have', { index: item.index, series });
-        change({ have: owned.have, downloadingId: owned.downloading });
+        // opened onto a copy already coming down: the band below the ficha follows it from here,
+        // so the live row it needs is picked up rather than waited for
+        const running = owned.downloading
+          && latest.current.progress.active.find((film) => film.id === owned.downloading);
+        change({
+          have: owned.have,
+          downloadingId: owned.downloading,
+          ...(running ? { watching: { ...running } } : {}),
+        });
       } catch (error) {
         change({ have: null, downloadingId: null });
       }
@@ -1143,9 +1292,63 @@ function App() {
       });
     },
 
-    toggleVersions: () => edit((state) => ({ showVersions: !state.showVersions })),
+    toggleVersions: () => edit((state) => ({
+      showVersions: !state.showVersions, confirmSwap: null,
+    })),
 
-    download: async (version) => {
+    // Her own film's copies are a question for the indexer, so they are asked for rather than
+    // fetched on every open: opening a film of hers must work with nothing else answering.
+    toggleCopies: async () => {
+      const { showCopies, copies, ownedId } = latest.current;
+      if (showCopies) {
+        change({ showCopies: false, confirmSwap: null });
+        return;
+      }
+      change({ showCopies: true, confirmSwap: null, copiesProblem: null });
+      if (copies) return;
+      change({ loadingCopies: true });
+      try {
+        const found = await invoke('copies', { id: ownedId });
+        if (latest.current.ownedId === ownedId) change({ copies: found });
+      } catch (error) {
+        if (latest.current.ownedId === ownedId) change({ copiesProblem: String(error) });
+      } finally {
+        change({ loadingCopies: false });
+      }
+    },
+
+    // Swapping ends with a film of hers in the papelera, so it is asked before it is done.
+    confirmSwap: (version) => change({ confirmSwap: version }),
+
+    swapCopy: async (version) => {
+      const { copies, ownedId, progress } = latest.current;
+      if (!copies) return;
+      const film = (progress.shelf || []).find((item) => item.id === ownedId);
+      change({
+        confirmSwap: null,
+        showCopies: false,
+        starting: true,
+        shelfNotice: null,
+        watching: {
+          title: film?.title || '', year: film?.year, cover_url: film?.cover_url,
+          series: Boolean(film?.series), status: 'starting', percent: 0,
+        },
+      });
+      try {
+        const grabbed = await invoke('grab', {
+          index: copies.index, version, series: copies.series, replacing: ownedId,
+        });
+        change({
+          watching: { ...latest.current.watching, id: grabbed.id },
+          downloadingId: grabbed.id,
+          starting: false,
+        });
+      } catch (error) {
+        change({ starting: false, watching: null, shelfNotice: { text: String(error), bad: true } });
+      }
+    },
+
+    download: async (version, replacing = null) => {
       const { detail, detailSeries } = latest.current;
       if (!detail) return;
       const watching = {
@@ -1156,18 +1359,30 @@ function App() {
         status: 'starting',
         percent: 0,
       };
-      change({ watching, screen: 'film', notice: null });
+      // the ficha stays: it is the page about this film, and what the copy is doing is a band
+      // under it rather than a screen somewhere else
+      // said on the screen the moment she picks it. The masthead knew instantly and the copies
+      // list sat there for seconds, so picking a copy read as having done nothing.
+      change({
+        watching, notice: null, starting: true, confirmSwap: null, showVersions: false,
+      });
       try {
-        const grabbed = await invoke('grab',
-                                     { index: detail.index, version, series: detailSeries });
+        const grabbed = await invoke('grab', {
+          index: detail.index, version, series: detailSeries, replacing,
+        });
         if (grabbed.already) {
-          // nothing was started: she has it already, and the film screen would be a lie
-          change({ watching: null, have: grabbed.id, screen: 'detail' });
+          // nothing was started: she has it already
+          change({ watching: null, have: grabbed.id, starting: false });
           return;
         }
-        change({ watching: { ...latest.current.watching, id: grabbed.id } });
+        change({
+          watching: { ...latest.current.watching, id: grabbed.id },
+          downloadingId: grabbed.id,
+          starting: false,
+        });
       } catch (error) {
         change({
+          starting: false,
           watching: { ...latest.current.watching, status: 'failed', detail: String(error) },
         });
       }
@@ -1182,6 +1397,8 @@ function App() {
             ...latest.current.watching,
             id: grabbed.id, status: 'retrying', detail: '', percent: 0,
           },
+          // the band under the ficha is about this film, so it follows the copy being spent
+          ...(latest.current.downloadingId === id ? { downloadingId: grabbed.id } : {}),
         });
       } catch (error) {
         actions.tell('notice')(error);
@@ -1206,6 +1423,8 @@ function App() {
         episodeAt: null,
         shelfNotice: null,
         screen: 'owned',
+        copies: null, showCopies: false, copiesProblem: null, confirmSwap: null,
+        starting: false,
       });
       invoke('library_synopsis', { id })
         .then((words) => {

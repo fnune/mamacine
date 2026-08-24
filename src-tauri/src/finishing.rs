@@ -100,6 +100,9 @@ pub struct Finisher {
     pub library: std::sync::Arc<Library>,
     pub log: std::sync::Arc<crate::log::Log>,
     pub language: String,
+    /// For the copy a swap leaves behind. Behind the same trait the shelf's Borrar uses, so a
+    /// test never touches a real bin.
+    pub remover: std::sync::Arc<dyn crate::orchestrator::Remover>,
     /// She will not stare at a progress bar for an hour: a finished film calls her back.
     pub notify: crate::orchestrator::Notify,
 }
@@ -127,6 +130,49 @@ impl Finisher {
                 continue;
             }
             self.settle(&item);
+        }
+    }
+
+    /// The copy she swapped out, now that the one she swapped it for is really here.
+    ///
+    /// Only now, and only if the new one landed: asked to change a copy because the one she had
+    /// spoke Italian, she must never be left with neither. The old folder goes to the papelera
+    /// rather than being deleted, so a swap she regrets is still recoverable by anyone.
+    fn retire_the_copy_it_replaces(&self, id: i64) {
+        let Some(replaced) = self.library.get(id).and_then(|entry| entry.replaces) else {
+            return;
+        };
+        self.library.update(id, |entry| entry.replaces = None);
+        let Some(folder) = self
+            .library
+            .get(replaced)
+            .and_then(|entry| entry.folder)
+            .filter(|folder| folder.exists())
+        else {
+            return;
+        };
+        match self.remover.remove(&folder) {
+            Ok(()) => {
+                self.log.line(&format!(
+                    "swapped out {replaced}: {} binned",
+                    folder.display()
+                ));
+                self.library.update(replaced, |entry| {
+                    entry.folder = None;
+                    entry.file = None;
+                    entry.settled = false;
+                });
+                self.library.note(
+                    replaced,
+                    "He cambiado esta copia por otra. La anterior está en la papelera.",
+                    "replaced by a copy she chose",
+                );
+            }
+            // she has the new copy either way; a bin that refuses is not worth a screen
+            Err(failure) => self.log.line(&format!(
+                "could not bin {} after the swap: {failure}",
+                folder.display()
+            )),
         }
     }
 
@@ -158,6 +204,7 @@ impl Finisher {
                 entry.title = item.name.clone();
             }
         });
+        self.retire_the_copy_it_replaces(item.id);
         self.library.note(
             item.id,
             if series {
@@ -693,6 +740,136 @@ mod tests {
 
     fn paths(names: &[&str]) -> Vec<PathBuf> {
         names.iter().map(PathBuf::from).collect()
+    }
+
+    #[derive(Default)]
+    struct Silent;
+
+    impl Downloader for Silent {
+        fn append(&self, _: &str, _: &[u8]) -> Result<i64> {
+            Ok(0)
+        }
+        fn queue(&self) -> Result<Vec<mamacine_core::nzbget::QueueItem>> {
+            Ok(Vec::new())
+        }
+        fn history(&self) -> Result<Vec<HistoryItem>> {
+            Ok(Vec::new())
+        }
+        fn download_rate(&self) -> Result<u64> {
+            Ok(0)
+        }
+        fn cancel(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn forget(&self, _: i64) -> Result<()> {
+            Ok(())
+        }
+        fn check_server(
+            &self,
+            _: &mamacine_core::settings::NewsServer,
+        ) -> mamacine_core::nzbget::ServerCheck {
+            mamacine_core::nzbget::ServerCheck::Unknown
+        }
+    }
+
+    impl SubtitleSource for Silent {
+        fn find(&self, _: &SubtitleQuery) -> Result<Vec<mamacine_core::subtitles::Candidate>> {
+            Ok(Vec::new())
+        }
+        fn download(&self, _: i64) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn downloads_remaining(&self) -> Option<i64> {
+            None
+        }
+    }
+
+    #[derive(Default)]
+    struct Binned(std::sync::Mutex<Vec<PathBuf>>);
+
+    impl crate::orchestrator::Remover for Binned {
+        fn remove(&self, folder: &Path) -> std::result::Result<(), String> {
+            self.0.lock().expect("not poisoned").push(folder.into());
+            std::fs::remove_dir_all(folder).map_err(|failure| failure.to_string())
+        }
+    }
+
+    // She asked for a copy in another language because the one she had spoke Italian. The old
+    // folder goes, but only once the new one is really here: a swap that fails must leave her
+    // the film she already had, not neither.
+    #[test]
+    fn the_copy_a_swap_leaves_behind_goes_to_the_bin_only_once_the_new_one_has_landed() {
+        let directory = std::env::temp_dir().join("mama-cine-swap-test");
+        let _ = std::fs::remove_dir_all(&directory);
+        let old = directory.join("La.Virgen.Roja.2024.ITA");
+        std::fs::create_dir_all(&old).expect("the copy she had");
+
+        let log = std::sync::Arc::new(crate::log::Log::open(&directory));
+        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        library.update(1, |entry| {
+            entry.title = "La virgen roja".into();
+            entry.settled = true;
+            entry.folder = Some(old.clone());
+        });
+        library.update(2, |entry| {
+            entry.title = "La virgen roja".into();
+            entry.replaces = Some(1);
+        });
+
+        let bin = std::sync::Arc::new(Binned::default());
+        let finisher = Finisher {
+            downloader: Box::new(Silent),
+            subtitles: Box::new(Silent),
+            library: std::sync::Arc::clone(&library),
+            log,
+            language: "es".into(),
+            remover: std::sync::Arc::clone(&bin)
+                as std::sync::Arc<dyn crate::orchestrator::Remover>,
+            notify: Box::new(|_, _| {}),
+        };
+
+        finisher.retire_the_copy_it_replaces(2);
+
+        assert_eq!(
+            bin.0.lock().expect("not poisoned").as_slice(),
+            std::slice::from_ref(&old)
+        );
+        assert!(!old.exists());
+        assert!(library.get(1).expect("the old record").folder.is_none());
+        assert!(!library.get(1).expect("the old record").settled);
+        assert_eq!(
+            library.get(2).expect("the new record").replaces,
+            None,
+            "the swap is done, so a later sweep does not bin anything again"
+        );
+
+        finisher.retire_the_copy_it_replaces(2);
+        assert_eq!(bin.0.lock().expect("not poisoned").len(), 1);
+    }
+
+    // Nothing is thrown away for a download that was never a swap.
+    #[test]
+    fn an_ordinary_download_bins_nothing() {
+        let directory = std::env::temp_dir().join("mama-cine-swap-none");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let log = std::sync::Arc::new(crate::log::Log::open(&directory));
+        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        library.update(9, |entry| entry.title = "El Sur".into());
+
+        let bin = std::sync::Arc::new(Binned::default());
+        let finisher = Finisher {
+            downloader: Box::new(Silent),
+            subtitles: Box::new(Silent),
+            library,
+            log,
+            language: "es".into(),
+            remover: std::sync::Arc::clone(&bin)
+                as std::sync::Arc<dyn crate::orchestrator::Remover>,
+            notify: Box::new(|_, _| {}),
+        };
+        finisher.retire_the_copy_it_replaces(9);
+        assert!(bin.0.lock().expect("not poisoned").is_empty());
     }
 
     // Before, a season pack's ten subtitle files were all renamed onto whichever episode happened

@@ -315,6 +315,7 @@ pub fn render_config(
          ScriptDir={work}/scripts\n\
          LockFile={work}/nzbget.lock\n\
          LogFile={work}/nzbget.log\n\
+         WebDir=\n\
          WriteLog=rotate\n\
          RotateLog=3\n\
          OutputMode=log\n\
@@ -551,6 +552,15 @@ mod tests {
         // obfuscated releases arrive as .x01/.x02: without this there is nothing to unpack, so
         // nzbget finds no damage to repair and files a broken folder as finished
         assert!(config().contains("DirectRename=yes"), "{}", config());
+    }
+
+    // nzbget looks for its own web interface next to its own executable, and on Windows that is
+    // a copy of it in a folder of ours with nothing else in it. Nobody ever opens that interface
+    // — the app is the interface — so the folder is not made; saying so keeps an ERROR out of the
+    // log that reads like the reason a start failed and is nothing of the kind.
+    #[test]
+    fn it_is_not_asked_for_a_web_interface_that_nobody_opens() {
+        assert!(config().contains("\nWebDir=\n"), "{}", config());
     }
 
     #[test]

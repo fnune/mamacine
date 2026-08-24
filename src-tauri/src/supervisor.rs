@@ -17,6 +17,9 @@ use std::time::{Duration, Instant};
 /// explain: the person who can act on it is whoever set the app up.
 const IN_THE_LOG: &str = "En Ajustes, «Abrir el registro» dice por qué.";
 
+/// Never written in full on the command line. See where it is passed.
+const CONFIG_NAME: &str = "nzbget.conf";
+
 pub struct Nzbget {
     process: Option<Child>,
     pidfile: std::path::PathBuf,
@@ -45,36 +48,51 @@ impl Nzbget {
 
         let port = free_port()?;
         let password = secret();
-        let config_path = work.join("nzbget.conf");
+        let config_path = work.join(CONFIG_NAME);
         write_private(
             &config_path,
             render_config(settings, &work, port, &password, tools).as_bytes(),
         )?;
 
+        let program = spelled_without_accents(&tools.nzbget, log);
         log.line(&format!(
             "starting {} (exists: {}) with {} on port {port}",
-            tools.nzbget.display(),
-            tools.nzbget.exists(),
+            program.display(),
+            program.exists(),
             config_path.display()
         ));
+        log.line(&format!(
+            "unrar is {} (exists: {}), 7za is {} (exists: {})",
+            tools.unrar.display(),
+            tools.unrar.exists(),
+            tools.sevenzip.display(),
+            tools.sevenzip.exists()
+        ));
 
-        let mut process = Command::new(&tools.nzbget)
+        // named from inside its own folder rather than in full: nzbget takes the `-c` argument
+        // from the C runtime, which spells it in the machine's code page, and then reads it as
+        // UTF-8. A bare `nzbget.conf` has nothing in it that the two spellings disagree about,
+        // and nzbget expands it against this directory through the wide interface, which does
+        // carry the accents.
+        let mut command = Command::new(&program);
+        command
+            .current_dir(&work)
             .arg("-c")
-            .arg(&config_path)
+            .arg(CONFIG_NAME)
             .arg("-s")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|failure| {
-                log.line(&format!(
-                    "nzbget could not be started ({}): {failure}",
-                    tools.nzbget.display()
-                ));
-                Error::Setup(format!(
-                    "No he podido arrancar el descargador. {IN_THE_LOG}"
-                ))
-            })?;
+            .stderr(Stdio::piped());
+        off_the_screen(&mut command);
+        let mut process = command.spawn().map_err(|failure| {
+            log.line(&format!(
+                "nzbget could not be started ({}): {failure}",
+                program.display()
+            ));
+            Error::Setup(format!(
+                "No he podido arrancar el descargador. {IN_THE_LOG}"
+            ))
+        })?;
 
         let ready = Arc::new(AtomicBool::new(false));
         forward(process.stdout.take(), log, &ready);
@@ -276,6 +294,97 @@ fn terminate(pid: u32) {
     }
 }
 
+/// Windows gives a console program a console, and nzbget is a console program: a black window
+/// stood beside the app with nothing in it she could act on, and its close button was a close
+/// button for the downloader. Everything it prints is read off the pipes either way, so the
+/// console was never showing anything the log does not already have.
+#[cfg(windows)]
+fn off_the_screen(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn off_the_screen(_command: &mut Command) {}
+
+/// A spelling of nzbget that nzbget itself can read.
+///
+/// On Windows it asks the system for its own file name through the narrow interface, which
+/// answers in the machine's code page, and then reads that answer as UTF-8. Under a profile
+/// named «María Esther» the í comes back as a single byte, UTF-8 reads that byte as the start
+/// of a three-letter sequence that is not there, the conversion throws, nothing catches it, and
+/// the process aborts with 0xC0000409. All of that happens before it opens its own log, which
+/// is why every failed start left nothing behind to read. Only what is inside the config file
+/// is safe, because that it reads as UTF-8 from the first byte: the destination and the working
+/// folders keep her name.
+fn spelled_without_accents(nzbget: &std::path::Path, log: &Arc<Log>) -> std::path::PathBuf {
+    if !cfg!(windows) || is_plain_ascii(nzbget) {
+        return nzbget.to_path_buf();
+    }
+    let directory = a_folder_nobody_is_named_in();
+    if !is_plain_ascii(&directory) {
+        log.line(&format!(
+            "{} has accents in it too, so nzbget will abort on {}",
+            directory.display(),
+            nzbget.display()
+        ));
+        return nzbget.to_path_buf();
+    }
+    let copy = directory.join(nzbget.file_name().unwrap_or("nzbget.exe".as_ref()));
+    if is_the_same_program(&copy, nzbget) {
+        return copy;
+    }
+    match std::fs::create_dir_all(&directory).and_then(|()| std::fs::copy(nzbget, &copy)) {
+        Ok(_) => {
+            log.line(&format!("nzbget copied to {}", copy.display()));
+            copy
+        }
+        // the one already there is a copy of the one we were about to write, and a start that
+        // works is worth more than a copy that is certainly of today's build
+        Err(failure) if copy.exists() => {
+            log.line(&format!(
+                "keeping the nzbget already in {} ({failure})",
+                directory.display()
+            ));
+            copy
+        }
+        Err(failure) => {
+            log.line(&format!(
+                "nzbget could not be copied to {} ({failure}), so it will abort on {}",
+                directory.display(),
+                nzbget.display()
+            ));
+            nzbget.to_path_buf()
+        }
+    }
+}
+
+/// Nothing that is hers goes here: the config file carries her news password and stays in her
+/// own folder, under her own account. Only the program is copied, and a program is public.
+fn a_folder_nobody_is_named_in() -> std::path::PathBuf {
+    std::env::var_os("ProgramData")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\ProgramData"))
+        .join("com.fnune.mamacine")
+        .join("bin")
+}
+
+fn is_plain_ascii(path: &std::path::Path) -> bool {
+    path.as_os_str().to_str().is_some_and(str::is_ascii)
+}
+
+/// Windows copies the modification time along with the file, so the nzbget an app update has
+/// since replaced does not answer to this and is copied again.
+fn is_the_same_program(copy: &std::path::Path, source: &std::path::Path) -> bool {
+    match (copy.metadata(), source.metadata()) {
+        (Ok(there), Ok(here)) => {
+            there.len() == here.len() && there.modified().ok() == here.modified().ok()
+        }
+        _ => false,
+    }
+}
+
 fn free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     Ok(listener.local_addr()?.port())
@@ -345,6 +454,75 @@ mod tests {
             "a log shorter than the tail is the whole log, not a panic"
         );
         assert!(last_lines("", 10).is_empty());
+    }
+
+    // Her Windows profile is «María Esther», and every start ended in an nzbget that aborted
+    // with 0xC0000409 before it could write a word about why. The í is the whole reason: nzbget
+    // reads its own file name back from the system in the machine's code page and then decodes
+    // it as UTF-8, and the two disagree about that one letter.
+    #[test]
+    fn a_program_reached_through_a_name_with_an_accent_in_it_is_a_program_that_aborts() {
+        assert!(!is_plain_ascii(std::path::Path::new(
+            r"C:\Users\María Esther\AppData\Local\Mamá Cine\nzbget.exe"
+        )));
+        assert!(is_plain_ascii(std::path::Path::new(
+            r"C:\ProgramData\com.fnune.mamacine\bin\nzbget.exe"
+        )));
+        assert!(
+            is_plain_ascii(&a_folder_nobody_is_named_in()),
+            "the folder we copy it to must be one nzbget can read: {}",
+            a_folder_nobody_is_named_in().display()
+        );
+    }
+
+    // Copying ten megabytes on every start would be a start she waits through.
+    #[test]
+    fn the_copy_is_made_once_and_then_recognised() {
+        let directory = std::env::temp_dir().join("mama-cine-copy-test");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let source = directory.join("nzbget");
+        std::fs::write(&source, b"a program").expect("a program");
+        let copy = directory.join("copy");
+
+        assert!(!is_the_same_program(&copy, &source));
+        std::fs::copy(&source, &copy).expect("a copy");
+        // Windows carries the modification time across on its own; here it is done by hand, so
+        // that the test says what a copy on her machine looks like rather than what one looks
+        // like on the machine this is written on.
+        let when = source
+            .metadata()
+            .expect("a program")
+            .modified()
+            .expect("a time");
+        std::fs::File::options()
+            .write(true)
+            .open(&copy)
+            .expect("the copy")
+            .set_modified(when)
+            .expect("the time a copy carries");
+        assert!(is_the_same_program(&copy, &source));
+
+        std::fs::write(&source, b"a newer program").expect("an update");
+        assert!(
+            !is_the_same_program(&copy, &source),
+            "an app update replaces nzbget, and the copy beside it is then the wrong one"
+        );
+    }
+
+    // Only Windows cannot read its own name. Nothing is copied anywhere else, and the paths
+    // there are left exactly as they were found.
+    #[test]
+    fn nothing_is_moved_on_a_system_that_can_read_the_name_it_was_given() {
+        if cfg!(windows) {
+            return;
+        }
+        let directory = std::env::temp_dir().join("mama-cine-accent-test");
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let nzbget = directory.join("María Esther").join("nzbget");
+        let log = Arc::new(Log::open(&directory));
+        assert_eq!(spelled_without_accents(&nzbget, &log), nzbget);
     }
 
     #[test]

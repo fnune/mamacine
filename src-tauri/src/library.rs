@@ -77,6 +77,10 @@ pub struct Entry {
     /// The nzb address of the copy this download actually fetched: what gets burned when the
     /// downloader refuses it.
     pub source: String,
+    /// The copy she is swapping out. She asked for a different one because the one she had was
+    /// in the wrong language, so the old folder goes to the papelera the moment this one lands
+    /// — never before, because a swap that fails must leave her the film she already had.
+    pub replaces: Option<i64>,
 }
 
 impl Entry {
@@ -229,6 +233,7 @@ impl Library {
     /// off her shelf even though the film is right there. Anything still unaccounted for is left
     /// alone: it will simply not be on the shelf, which is the truth.
     pub fn reconcile(&self, destination: &Path) {
+        self.release_ghosts();
         for (id, entry) in self.all() {
             if !entry.settled {
                 continue;
@@ -242,7 +247,15 @@ impl Library {
             if !missing && key == entry.key {
                 continue;
             }
-            let found = missing
+            // Only a record that never knew where its film landed goes looking. A folder that
+            // was written down and is now gone is a film she threw away, and `folder_named`
+            // matches on the title alone: after deleting one copy and downloading another, it
+            // handed the deleted record the new copy's folder. Both records then said she had
+            // the film, so her shelf showed it twice and "ya la tienes" answered for a copy
+            // that was in the recycle bin.
+            let found = entry
+                .folder
+                .is_none()
                 .then(|| folder_named(&entry.title, destination))
                 .flatten();
             self.update(id, |entry| {
@@ -251,6 +264,37 @@ impl Library {
                     entry.file = crate::finishing::largest_video(&folder);
                     entry.folder = Some(folder);
                 }
+            });
+        }
+    }
+
+    /// Two records cannot both be the film sitting in one folder.
+    ///
+    /// Repairing what the old rule already wrote down. A film she deleted was handed the folder
+    /// of the copy that replaced it, and from then on her shelf held both: the copy she has, and
+    /// the ghost of the one she threw away, pointing at the same place on the disk. The newer
+    /// record is the copy she actually downloaded, so the older one lets go.
+    fn release_ghosts(&self) {
+        let mut claimed = std::collections::HashSet::new();
+        let mut ghosts = Vec::new();
+        for (id, entry) in self.all() {
+            let Some(folder) = entry.folder.filter(|_| entry.settled) else {
+                continue;
+            };
+            if !claimed.insert(folder.clone()) {
+                self.log.line(&format!(
+                    "{id} and a newer record both name {}: releasing the older one",
+                    folder.display()
+                ));
+                ghosts.push(id);
+            }
+        }
+        for id in ghosts {
+            self.update(id, |entry| {
+                entry.folder = None;
+                entry.file = None;
+                // never settled anywhere, so nothing goes looking for a folder to give it back
+                entry.settled = false;
             });
         }
     }
@@ -505,6 +549,74 @@ mod tests {
         );
         library.reconcile(&films);
         assert!(library.present("imdb:82096").is_none());
+    }
+
+    // She deleted a copy and downloaded another. On the next start this went looking for a
+    // folder with her title in it, found the copy that replaced it, and wrote it into the record
+    // of the one she had thrown away. Both records then claimed she had the film.
+    #[test]
+    fn a_film_she_threw_away_is_never_handed_the_folder_of_the_one_that_replaced_it() {
+        let directory = scratch("reconcile-replaced");
+        let films = directory.join("films");
+        let deleted = films.join("La.Virgen.Roja.2024.ITA.1080p");
+        let kept = films.join("La.Virgen.Roja.2024.TRUEFRENCH.1080p");
+        std::fs::create_dir_all(&kept).expect("the copy she kept");
+
+        let library = open(&directory);
+        library.put(
+            1,
+            Entry {
+                title: "La virgen roja".into(),
+                imdb: Some("30748104".into()),
+                settled: true,
+                folder: Some(deleted.clone()),
+                ..Entry::default()
+            },
+        );
+        library.reconcile(&films);
+
+        let (_, entry) = library.get(1).map(|entry| (1, entry)).expect("the record");
+        assert_eq!(
+            entry.folder.as_deref(),
+            Some(deleted.as_path()),
+            "the record still names the folder she emptied, and so it is not on her shelf"
+        );
+        assert!(library.present("imdb:30748104").is_none());
+    }
+
+    // The old rule already wrote the ghost into her library: two records, one folder, one film
+    // standing on her shelf twice. Starting the app has to put that right, not just stop doing it.
+    #[test]
+    fn one_folder_is_one_film_however_many_records_point_at_it() {
+        let directory = scratch("ghost");
+        let films = directory.join("films");
+        let landed = films.join("La.Virgen.Roja.2024.TRUEFRENCH.1080p");
+        std::fs::create_dir_all(&landed).expect("the copy she has");
+
+        let library = open(&directory);
+        let ghosted = |title: &str| Entry {
+            title: title.into(),
+            key: "imdb:30748104".into(),
+            settled: true,
+            folder: Some(landed.clone()),
+            ..Entry::default()
+        };
+        library.put(1, ghosted("La virgen roja"));
+        library.put(2, ghosted("La virgen roja"));
+
+        library.reconcile(&films);
+
+        assert!(library.get(1).expect("the older record").folder.is_none());
+        assert_eq!(
+            library.get(2).expect("the newer record").folder.as_deref(),
+            Some(landed.as_path()),
+            "the copy she actually downloaded keeps its folder"
+        );
+        assert_eq!(
+            library.present("imdb:30748104").map(|(id, _)| id),
+            Some(2),
+            "and there is only one of it"
+        );
     }
 
     // Closing the window mid-download used to lose the copies it had left to try, so the next

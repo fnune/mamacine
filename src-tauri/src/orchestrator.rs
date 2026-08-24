@@ -316,6 +316,14 @@ pub struct Shelved {
     pub series: bool,
 }
 
+/// The other copies of a film she owns, with the handle that lets one of them be started.
+#[derive(Serialize)]
+pub struct Copies {
+    pub index: usize,
+    pub series: bool,
+    pub versions: Vec<Version>,
+}
+
 /// What the detail screen needs to not lie: on the shelf, on its way, or neither.
 #[derive(Serialize)]
 pub struct Owned {
@@ -849,6 +857,47 @@ impl Orchestrator {
             .collect())
     }
 
+    /// The copies of something she already has, so that a film in the wrong language is one
+    /// decision rather than a delete and a fresh search.
+    ///
+    /// Asked for by hand rather than on every open: it is a question for the indexer, and her
+    /// own films have to open when nothing outside this computer is answering. The search it
+    /// runs is what leaves an index behind for `grab`, which is why the index comes back here.
+    pub fn copies_of(&self, id: i64) -> Result<Copies, String> {
+        let entry = self
+            .library
+            .get(id)
+            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+        let query = match entry
+            .imdb
+            .as_deref()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+        {
+            Some(imdb) => format!("tt{}", imdb.trim_start_matches("tt")),
+            None if !entry.title.is_empty() => entry.title.clone(),
+            None => {
+                return Err(
+                    "No sé lo suficiente sobre esta película para buscar otras copias.".to_string(),
+                )
+            }
+        };
+        let series = entry.series;
+        let found = self.search(&query, Some(if series { "series" } else { "film" }), None)?;
+        let index = if series {
+            found.seasons.first().map(|season| season.index)
+        } else {
+            found.films.first().map(|film| film.index)
+        };
+        let index = index
+            .ok_or_else(|| "No he encontrado ninguna otra copia de esta película.".to_string())?;
+        Ok(Copies {
+            index,
+            series,
+            versions: self.versions(index, series)?,
+        })
+    }
+
     /// Whether she already has this — answered by her folder — and whether it is already on its
     /// way. The detail screen offered "Descargar" for a season that was downloading at that very
     /// moment, because it only knew about the shelf.
@@ -877,11 +926,15 @@ impl Orchestrator {
 
     // --- downloading -------------------------------------------------------------
 
+    /// `replacing` is her saying she knows she has this and wants a different copy of it: the
+    /// one she has spoke the wrong language. It is the only way past "ya la tienes", and the
+    /// copy it names is not touched until the new one has actually landed.
     pub fn grab(
         &self,
         index: usize,
         version: Option<usize>,
         series: bool,
+        replacing: Option<i64>,
     ) -> Result<Grabbed, String> {
         let (seed, releases, name, key) = if series {
             let season = self
@@ -932,8 +985,10 @@ impl Orchestrator {
             (seed, film.releases, name, key)
         };
 
-        if let Some((id, _)) = self.library.present(&key) {
-            return Ok(Grabbed { id, already: true });
+        if replacing.is_none() {
+            if let Some((id, _)) = self.library.present(&key) {
+                return Ok(Grabbed { id, already: true });
+            }
         }
         // a second press must follow the download that is already running, not start a twin
         if let Some(id) = self.in_flight(&key) {
@@ -944,7 +999,10 @@ impl Orchestrator {
         self.start(Attempt {
             total: ordered.len(),
             remaining: ordered,
-            seed,
+            seed: Entry {
+                replaces: replacing,
+                ..seed
+            },
             name,
         })
         .map(|id| Grabbed { id, already: false })
@@ -1523,7 +1581,8 @@ impl Orchestrator {
             Ok(queue) => queue,
             Err(failure) => {
                 let explained = messages::explain(&failure);
-                self.log.line(&format!("progress: {}", explained.why));
+                self.log
+                    .standing("progress", &format!("progress: {}", explained.why));
                 return Progress {
                     active: Vec::new(),
                     finished: Vec::new(),
@@ -1540,7 +1599,8 @@ impl Orchestrator {
             Ok(history) => history,
             Err(failure) => {
                 let explained = messages::explain(&failure);
-                self.log.line(&format!("progress: {}", explained.why));
+                self.log
+                    .standing("progress", &format!("progress: {}", explained.why));
                 return Progress {
                     active: Vec::new(),
                     finished: Vec::new(),
@@ -1553,6 +1613,8 @@ impl Orchestrator {
                 };
             }
         };
+        self.log.settled("progress");
+
         let rate = self.downloader.download_rate().unwrap_or(0);
         if rate > 500_000 {
             let mut last = self.last_rate.lock().expect("not poisoned");
@@ -1693,10 +1755,16 @@ impl Orchestrator {
 
     /// Her films, as they are on the disk right now. Works even when the downloader does not.
     fn shelf(&self) -> Vec<Shelved> {
+        // One film, one card. Two records of the same film can both be on the disk — a copy she
+        // deleted whose record was handed the next copy's folder, or the same film downloaded
+        // twice — and "La virgen roja" stood on her shelf twice over. `all` is newest first, so
+        // what survives is the copy she got last.
+        let mut shown = std::collections::HashSet::new();
         self.library
             .all()
             .into_iter()
             .filter(|(_, entry)| entry.present())
+            .filter(|(_, entry)| entry.key.is_empty() || shown.insert(entry.key.clone()))
             .map(|(id, entry)| Shelved {
                 id,
                 title: entry.title,
@@ -2186,24 +2254,57 @@ fn voice_of(release: &SearchResult) -> &'static str {
         "es"
     } else if has(Tag::Latino) {
         "latino"
+    } else if has(Tag::OtherLanguage) {
+        "otro"
     } else {
         "original"
     }
 }
 
+/// Which languages a copy is in, said outright wherever its name says so.
+///
+/// "Versión original" over an Italian copy is the app telling her something it does not know,
+/// and she found that out by watching twenty minutes of it. "En otro idioma" was no better: it
+/// says the copy is wrong without saying what it is, so the only way to find out was still to
+/// download it. A name that carries two languages is read as two.
 fn language_of(release: &SearchResult) -> String {
     use mamacine_core::release::Tag;
     let has = |tag: Tag| release.tags.contains(&tag);
-    if has(Tag::Spanish) {
-        "Español".into()
-    } else if has(Tag::Latino) {
-        "Español latino".into()
-    } else if has(Tag::Dual) {
-        "Dos idiomas".into()
-    } else if has(Tag::Subbed) {
-        "Original con subtítulos".into()
-    } else {
-        "Versión original".into()
+    let spoken = mamacine_core::release::languages_named(&release.title);
+    let said = match spoken.as_slice() {
+        [] => String::new(),
+        [only] => capitalised(only),
+        [first, rest @ ..] => {
+            let mut said = capitalised(first);
+            for other in rest {
+                said.push_str(" y ");
+                said.push_str(other);
+            }
+            said
+        }
+    };
+    if has(Tag::Subbed) {
+        return match said.is_empty() {
+            true => "Original con subtítulos".into(),
+            false => format!("{said}, con subtítulos"),
+        };
+    }
+    if !said.is_empty() {
+        return said;
+    }
+    // nothing in the name says anything, and an unmarked copy is the original often enough that
+    // the honest guess is worth more than silence
+    if has(Tag::Dual) {
+        return "Dos idiomas".into();
+    }
+    "Versión original".into()
+}
+
+fn capitalised(word: &str) -> String {
+    let mut letters = word.chars();
+    match letters.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + letters.as_str(),
+        None => String::new(),
     }
 }
 
@@ -2817,7 +2918,7 @@ mod tests {
             .expect("a film");
         world
             .orchestrator
-            .grab(0, None, false)
+            .grab(0, None, false, None)
             .expect("a download")
             .id
     }
@@ -3123,7 +3224,7 @@ mod tests {
             .orchestrator
             .search("das boot", None, None)
             .ok()
-            .and_then(|_| world.orchestrator.grab(0, None, false).ok())
+            .and_then(|_| world.orchestrator.grab(0, None, false, None).ok())
             .expect("a download")
             .id;
 
@@ -3306,7 +3407,7 @@ mod tests {
         let first = grab_first(&world);
         let second = world
             .orchestrator
-            .grab(0, None, false)
+            .grab(0, None, false, None)
             .expect("the same download");
         assert_eq!(second.id, first);
         assert!(!second.already);
@@ -3923,7 +4024,7 @@ mod tests {
             .orchestrator
             .search("das boot", None, None)
             .expect("results");
-        let refused = world.orchestrator.grab(0, None, false);
+        let refused = world.orchestrator.grab(0, None, false, None);
         assert!(
             refused
                 .expect_err("nothing worth starting")
@@ -3973,7 +4074,7 @@ mod tests {
             .expect("results");
         let id = world
             .orchestrator
-            .grab(0, None, false)
+            .grab(0, None, false, None)
             .expect("a download")
             .id;
         assert_eq!(
@@ -4157,7 +4258,7 @@ mod tests {
 
         let id = world
             .orchestrator
-            .grab(0, None, false)
+            .grab(0, None, false, None)
             .expect("a download")
             .id;
         let entry = world.orchestrator.library.get(id).expect("remembered");
