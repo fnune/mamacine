@@ -1502,6 +1502,25 @@ test('going back from a film returns to the results she came from', async () => 
   assert.equal(app.document.querySelectorAll('#results .film').length, 3);
 });
 
+// The fold's own button stretched across a row of its own, twice the size of the buttons it
+// belongs with. It is a button among the buttons.
+test('the way to other copies sits with the other buttons, at their size', async () => {
+  const app = start();
+  await searchFor(app, 'el sur');
+  click(app, app.document.querySelector('#results .film'));
+  await settle();
+
+  const toggle = app.document.getElementById('show-copies');
+  assert.ok(toggle.closest('.actions'), 'it stands in the row of buttons, not below it');
+  assert.ok(app.document.getElementById('download').closest('.actions'));
+
+  click(app, toggle);
+  await settle();
+  const row = app.document.querySelector('.version');
+  assert.equal(row.tagName, 'DIV', 'a row of facts, not one big button');
+  assert.ok(row.querySelector('button.pick'), 'the button that starts it lives inside the row');
+});
+
 test('choosing another copy downloads that copy', async () => {
   const app = start();
   await searchFor(app, 'el sur');

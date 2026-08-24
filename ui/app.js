@@ -346,7 +346,13 @@ function FilmPage({
       </div>
       <div class="band decision ${bad ? 'bad' : ''}" id=${bandId}>
         <div class="facts">${facts}</div>
-        <div class="actions">${actions}</div>
+        <div class="actions">
+          ${actions}
+          ${copies?.more && html`
+            <button class="quiet" id="show-copies" onClick=${copies.onToggle}>
+              ${copies.more}
+            </button>`}
+        </div>
         ${copies && html`<${Copies} ...${copies} />`}
       </div>
     </section>`;
@@ -355,17 +361,11 @@ function FilmPage({
 // The copies, each with the button that starts it. The row itself was the button, so nothing on
 // the screen said that touching a line of text would spend an hour of her connection — and when
 // it did start, the list sat there unchanged while the masthead already knew.
-function Copies({ versions, open, onToggle, verb, onPick, confirming, onConfirm, onDismiss,
-                  loading, problem, more }) {
-  if (!open) {
-    return more && html`
-      <div class="versions">
-        <button class="quiet" id="show-copies" onClick=${onToggle}>${more}</button>
-      </div>`;
-  }
+function Copies({ versions, open, verb, onPick, confirming, onConfirm, onDismiss,
+                  loading, problem }) {
+  if (!open) return null;
   return html`
     <div class="versions" id="copies">
-      ${more && html`<button class="quiet" id="show-copies" onClick=${onToggle}>Ocultar las copias</button>`}
       ${loading && html`<p class="factline" id="copies-waiting">Buscando otras copias…</p>`}
       ${problem && html`<${Notice} notice=${{ text: problem, bad: true }} />`}
       ${(versions || []).map((version) => html`

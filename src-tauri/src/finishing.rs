@@ -151,6 +151,24 @@ impl Finisher {
         else {
             return;
         };
+        // The copy that just landed is never what gets thrown away. Both copies of a film used
+        // to be filed under the film's title, so the new one arrived in the folder of the one it
+        // was replacing and this binned the pair of them: she asked to change the language of a
+        // film and the film went to the papelera. Nothing else that is hers goes either.
+        let landed_in = self.library.get(id).and_then(|entry| entry.folder);
+        let shared = landed_in.as_deref() == Some(folder.as_path())
+            || self.library.all().into_iter().any(|(other, entry)| {
+                other != replaced
+                    && entry.settled
+                    && entry.folder.as_deref() == Some(folder.as_path())
+            });
+        if shared {
+            self.log.line(&format!(
+                "not binning {}: the copy that replaced {replaced} is in it too",
+                folder.display()
+            ));
+            return;
+        }
         match self.remover.remove(&folder) {
             Ok(()) => {
                 self.log.line(&format!(
@@ -845,6 +863,45 @@ mod tests {
 
         finisher.retire_the_copy_it_replaces(2);
         assert_eq!(bin.0.lock().expect("not poisoned").len(), 1);
+    }
+
+    // She asked to change the language of a film and the film went to the papelera: both copies
+    // were filed under the film's title, so the replacement landed in the folder of the copy it
+    // was replacing, and binning that folder took the one she had just waited for.
+    #[test]
+    fn a_swap_never_bins_the_folder_the_new_copy_landed_in() {
+        let directory = std::env::temp_dir().join("mama-cine-swap-collide");
+        let _ = std::fs::remove_dir_all(&directory);
+        let shared = directory.join("The red virgin");
+        std::fs::create_dir_all(&shared).expect("the one folder both landed in");
+
+        let log = std::sync::Arc::new(crate::log::Log::open(&directory));
+        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        library.update(1, |entry| {
+            entry.settled = true;
+            entry.folder = Some(shared.clone());
+        });
+        library.update(2, |entry| {
+            entry.settled = true;
+            entry.folder = Some(shared.clone());
+            entry.replaces = Some(1);
+        });
+
+        let bin = std::sync::Arc::new(Binned::default());
+        let finisher = Finisher {
+            downloader: Box::new(Silent),
+            subtitles: Box::new(Silent),
+            library: std::sync::Arc::clone(&library),
+            log,
+            language: "es".into(),
+            remover: std::sync::Arc::clone(&bin)
+                as std::sync::Arc<dyn crate::orchestrator::Remover>,
+            notify: Box::new(|_, _| {}),
+        };
+        finisher.retire_the_copy_it_replaces(2);
+
+        assert!(bin.0.lock().expect("not poisoned").is_empty());
+        assert!(shared.exists(), "the film she waited for is still there");
     }
 
     // Nothing is thrown away for a download that was never a swap.

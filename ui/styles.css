@@ -607,18 +607,31 @@ button.link.bad { color: var(--bad); }
 
 /* Which copy is being taken, and the way to take a different one */
 .chosen { color: var(--dim); margin: 6px 0 0; font-size: 16px; }
-.versions { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; max-width: 640px; }
+.versions { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; max-width: 720px; }
+/* A row, not a button: the row used to be the button, so nothing said that touching a line of
+   text would spend an hour of her connection. The button that does that sits at its end, and is
+   sized for a row rather than for a decision. */
 .version {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 14px;
   text-align: left;
-  padding: 14px 16px;
+  padding: 8px 14px;
   width: 100%;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
 }
-.version .what { font-weight: 700; }
-.version .who { color: var(--dim); font-size: 15px; }
-.version .mark { margin-left: auto; color: var(--accent); font-size: 15px; }
+.version .what { font-weight: 700; flex: none; }
+.version .who { color: var(--dim); font-size: 15px; flex: 1; min-width: 0; }
+.version .mark { color: var(--accent); font-size: 15px; flex: none; }
+.version .pick, .version .confirm button {
+  flex: none;
+  padding: 7px 13px;
+  font-size: 15px;
+  font-weight: 600;
+}
+.version .confirm { flex: none; gap: 8px; font-size: 15px; }
 
 /* A season is watched from here: episodes named as she counts them, each one a row that opens
    its own page rather than starting something without saying so. */

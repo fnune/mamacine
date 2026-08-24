@@ -1003,7 +1003,15 @@ impl Orchestrator {
                 replaces: replacing,
                 ..seed
             },
-            name,
+            // A swap is filed under a name of its own. Both copies of a film are appended to the
+            // downloader under the film's title, so a replacement landed in the folder of the
+            // copy it was replacing, and binning that folder took the copy she had just waited
+            // for. The number is the record it replaces, so a second swap cannot collide with
+            // the first.
+            name: match replacing {
+                Some(replaced) => format!("{name} ({replaced})"),
+                None => name,
+            },
         })
         .map(|id| Grabbed { id, already: false })
     }
