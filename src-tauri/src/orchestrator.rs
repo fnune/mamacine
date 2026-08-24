@@ -1016,13 +1016,29 @@ impl Orchestrator {
         .map(|id| Grabbed { id, already: false })
     }
 
+    /// The download of this film that is still going, if there is one.
+    ///
+    /// "Still going" is asked of the downloader, never only of our own bookkeeping: an attempt
+    /// that outlived its download made this answer with an id that had finished hours ago, and
+    /// the caller then had nothing to wait for.
     fn in_flight(&self, key: &str) -> Option<i64> {
+        let done: std::collections::HashSet<i64> = self
+            .downloader
+            .history()
+            .map(|history| {
+                history
+                    .iter()
+                    .filter(|item| item.succeeded)
+                    .map(|item| item.id)
+                    .collect()
+            })
+            .unwrap_or_default();
         if let Some(id) = self
             .attempts
             .lock()
             .expect("not poisoned")
             .iter()
-            .find(|(_, attempt)| attempt.seed.key == key)
+            .find(|(id, attempt)| attempt.seed.key == key && !done.contains(id))
             .map(|(id, _)| *id)
         {
             return Some(id);
@@ -1322,6 +1338,12 @@ impl Orchestrator {
             .collect();
         for item in &history {
             if item.succeeded {
+                // A copy that arrived has nothing left to chase, and the attempt behind it was
+                // never dropped: it sat in this map for the rest of the run, and `in_flight` read
+                // it as a download still going. Asked for a different copy of a film she already
+                // had, the app handed back that finished id and started nothing, so the bar went
+                // to zero and straight to "lista para ver" without a byte being fetched.
+                self.attempts.lock().expect("not poisoned").remove(&item.id);
                 continue;
             }
             if abandoned_deliberately(&item.status) {
@@ -1867,6 +1889,8 @@ impl Orchestrator {
             .filter(|folder| folder.exists())
             .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
         self.remover.remove(&folder)?;
+        // said outright, so nothing later reads the empty folder as a film to go looking for
+        self.library.update(id, |entry| entry.retired = true);
         self.library.note(
             id,
             "La has enviado a la papelera. Desde ahí todavía la puedes recuperar.",
@@ -2628,6 +2652,29 @@ mod tests {
         }
     }
 
+    struct SharedRemover(Arc<FakeRemover>);
+    impl Remover for SharedRemover {
+        fn remove(&self, folder: &Path) -> std::result::Result<(), String> {
+            self.0.remove(folder)
+        }
+    }
+
+    struct NoSubtitles;
+    impl mamacine_core::opensubtitles::SubtitleSource for NoSubtitles {
+        fn find(
+            &self,
+            _: &mamacine_core::opensubtitles::SubtitleQuery,
+        ) -> Result<Vec<mamacine_core::subtitles::Candidate>> {
+            Ok(Vec::new())
+        }
+        fn download(&self, _: i64) -> Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn downloads_remaining(&self) -> Option<i64> {
+            None
+        }
+    }
+
     struct FakeProber {
         answers: std::sync::Arc<Mutex<Vec<f64>>>,
         bodies: std::sync::Arc<Mutex<Vec<Vec<u8>>>>,
@@ -2816,6 +2863,12 @@ mod tests {
 
     struct World {
         orchestrator: Orchestrator,
+        /// The same records the orchestrator writes, so a flow can be followed the whole way
+        /// rather than only up to the point where the download was handed over.
+        library: Arc<Library>,
+        finisher: crate::finishing::Finisher,
+        /// What the swap and the shelf's Borrar actually sent to the bin.
+        binned: Arc<FakeRemover>,
         downloader: Arc<FakeDownloader>,
         notified: Arc<Mutex<Vec<(String, String)>>>,
         prober_answers: Arc<Mutex<Vec<f64>>>,
@@ -2866,6 +2919,9 @@ mod tests {
             }
         }
 
+        let library = Arc::new(Library::open(&directory, Arc::clone(&log)));
+        let finisher_log = Arc::clone(&log);
+        let binned = Arc::new(FakeRemover::default());
         let asked: Arc<Mutex<Vec<Query>>> = Arc::new(Mutex::new(Vec::new()));
         let orchestrator = Orchestrator::new(Pieces {
             indexers: vec![(
@@ -2878,7 +2934,7 @@ mod tests {
                 }) as Box<dyn Indexer>,
             )],
             downloader: Box::new(SharedDownloader(Arc::clone(&downloader))),
-            library: Arc::new(Library::open(&directory, Arc::clone(&log))),
+            library: Arc::clone(&library),
             log,
             destination: directory.join("films"),
             news: NewsServer {
@@ -2893,7 +2949,7 @@ mod tests {
             preference: Preference::Any,
             subtitle_language: "es".into(),
             disk: Box::new(FakeDisk(free)),
-            remover: Box::new(FakeRemover::default()),
+            remover: Box::new(SharedRemover(Arc::clone(&binned))),
             suggestions: Box::new(NoSuggestions),
             prober: Box::new(FakeProber {
                 answers: std::sync::Arc::clone(&prober_answers),
@@ -2905,8 +2961,22 @@ mod tests {
                     .push((title.to_string(), body.to_string()));
             }),
         });
+        // the same downloader, the same records, the same bin: what the app wires together at
+        // startup, so a test can watch a download all the way onto her shelf
+        let finisher = crate::finishing::Finisher {
+            downloader: Box::new(SharedDownloader(Arc::clone(&downloader))),
+            subtitles: Box::new(NoSubtitles),
+            library: Arc::clone(&library),
+            log: Arc::clone(&finisher_log),
+            language: "es".into(),
+            remover: Arc::clone(&binned) as Arc<dyn Remover>,
+            notify: Box::new(|_, _| {}),
+        };
         World {
             orchestrator,
+            library,
+            finisher,
+            binned,
             downloader,
             notified,
             prober_answers,
@@ -2929,6 +2999,169 @@ mod tests {
             .grab(0, None, false, None)
             .expect("a download")
             .id
+    }
+
+    /// nzbget finishing a download, and the app doing what it does next.
+    ///
+    /// The whole life of a copy in one call: the folder appears on the disk, the downloader
+    /// starts calling it succeeded, and the finisher settles it onto her shelf. Every bug worth
+    /// the name this month lived between those steps and not inside any of them.
+    fn arrives(world: &World, id: i64, folder: &str) -> PathBuf {
+        let landed = world.orchestrator.destination.join(folder);
+        std::fs::create_dir_all(&landed).expect("a folder");
+        std::fs::write(landed.join("film.mkv"), vec![0u8; 4096]).expect("a film");
+        world
+            .downloader
+            .queue
+            .lock()
+            .expect("not poisoned")
+            .retain(|item| item.id != id);
+        world
+            .downloader
+            .history
+            .lock()
+            .expect("not poisoned")
+            .push(HistoryItem {
+                id,
+                name: folder.into(),
+                succeeded: true,
+                status: "SUCCESS/ALL".into(),
+                directory: Some(landed.display().to_string()),
+                size_mb: 2000,
+                total_articles: 6000,
+                failed_articles: 0,
+                health_percent: 100.0,
+            });
+        world.finisher.sweep();
+        landed
+    }
+
+    // --- the whole life of a copy ------------------------------------------------
+
+    // The happy path, end to end: nothing here is asserted anywhere else, because every other
+    // test stops at the point where the download was handed over.
+    #[test]
+    fn a_film_searched_for_and_downloaded_ends_up_on_her_shelf() {
+        let world = world_with(
+            vec![release("Das Boot 1981 1080p BluRay x264-A", 2.0, 900)],
+            200 * GIGABYTE,
+        );
+        let id = grab_first(&world);
+        assert!(world.orchestrator.progress().shelf.is_empty(), "not yet");
+
+        let landed = arrives(&world, id, "Das Boot");
+
+        let shelf = world.orchestrator.progress().shelf;
+        assert_eq!(shelf.len(), 1);
+        assert_eq!(shelf[0].id, id);
+        let entry = world.library.get(id).expect("her record");
+        assert!(entry.present());
+        assert_eq!(entry.folder.as_deref(), Some(landed.as_path()));
+        assert!(
+            entry.remaining.is_empty(),
+            "the copies behind it are not a plan any more"
+        );
+        assert_eq!(world.orchestrator.have(0, false).have, Some(id));
+    }
+
+    // The whole swap, which is the flow that deleted her film twice: she has a copy, she picks a
+    // different one, and only once the new one is really here does the old one go.
+    #[test]
+    fn swapping_a_copy_keeps_the_new_one_and_bins_only_the_old_one() {
+        let world = world_with(
+            vec![
+                release("La Virgen Roja 2024 1080p ITA x264-A", 2.0, 900),
+                release("La Virgen Roja 2024 1080p WEB x264-B", 2.2, 400),
+            ],
+            200 * GIGABYTE,
+        );
+        let first = grab_first(&world);
+        let old = arrives(&world, first, "La Virgen Roja");
+
+        let swapped = world
+            .orchestrator
+            .grab(0, Some(1), false, Some(first))
+            .expect("a swap");
+        assert_ne!(swapped.id, first, "a swap downloads something");
+        assert!(
+            old.exists(),
+            "and takes nothing away while it is still coming"
+        );
+        assert!(world.library.get(first).expect("the old record").present());
+
+        let new = arrives(&world, swapped.id, "La Virgen Roja (1)");
+
+        assert!(!old.exists(), "the copy she swapped out is gone");
+        assert_eq!(
+            world
+                .binned
+                .removed
+                .lock()
+                .expect("not poisoned")
+                .as_slice(),
+            std::slice::from_ref(&old),
+            "and it is the only thing that went to the bin"
+        );
+        assert!(new.exists(), "the copy she asked for is here");
+        let shelf = world.orchestrator.progress().shelf;
+        assert_eq!(shelf.len(), 1, "one film, one card");
+        assert_eq!(shelf[0].id, swapped.id);
+        assert!(world.library.get(first).expect("the old record").retired);
+    }
+
+    // A retired record stays retired: nzbget still calls its download succeeded, so every sweep
+    // is another chance for it to climb back onto her shelf.
+    #[test]
+    fn a_copy_she_swapped_out_does_not_come_back_on_the_next_sweep() {
+        let world = world_with(
+            vec![
+                release("La Virgen Roja 2024 1080p ITA x264-A", 2.0, 900),
+                release("La Virgen Roja 2024 1080p WEB x264-B", 2.2, 400),
+            ],
+            200 * GIGABYTE,
+        );
+        let first = grab_first(&world);
+        arrives(&world, first, "La Virgen Roja");
+        let swapped = world
+            .orchestrator
+            .grab(0, Some(1), false, Some(first))
+            .expect("a swap");
+        arrives(&world, swapped.id, "La Virgen Roja (1)");
+
+        for _ in 0..3 {
+            world.finisher.sweep();
+            world.library.reconcile(&world.orchestrator.destination);
+        }
+
+        assert_eq!(world.orchestrator.progress().shelf.len(), 1);
+        assert!(!world.library.get(first).expect("the old record").present());
+        assert_eq!(world.binned.removed.lock().expect("not poisoned").len(), 1);
+    }
+
+    // She threw a film away and downloaded another copy of it. The repair used to hand the
+    // deleted record the new copy's folder, and her shelf then held the film twice.
+    #[test]
+    fn a_film_she_deleted_and_downloaded_again_stands_on_her_shelf_once() {
+        let world = world_with(
+            vec![release("Das Boot 1981 1080p BluRay x264-A", 2.0, 900)],
+            200 * GIGABYTE,
+        );
+        let first = grab_first(&world);
+        arrives(&world, first, "Das Boot");
+        world.orchestrator.remove(first).expect("to the bin");
+
+        let again = world
+            .orchestrator
+            .grab(0, None, false, None)
+            .expect("again");
+        assert_ne!(again.id, first, "she can ask for it again once it is gone");
+        assert!(!again.already);
+        arrives(&world, again.id, "Das Boot 1981");
+        world.library.reconcile(&world.orchestrator.destination);
+
+        let shelf = world.orchestrator.progress().shelf;
+        assert_eq!(shelf.len(), 1, "one film, one card");
+        assert_eq!(shelf[0].id, again.id);
     }
 
     // --- the behaviour -----------------------------------------------------------
@@ -3283,6 +3516,62 @@ mod tests {
             progress.shelf.len(),
             1,
             "her films are not hostage to nzbget"
+        );
+    }
+
+    // A copy that arrived left its attempt in the map for the rest of the run, and `in_flight`
+    // read that as a download still going. Asked for a different copy of a film she already had,
+    // the app handed back the id of the finished one and started nothing: the bar went to zero
+    // and straight to "lista para ver" without a byte being fetched.
+    #[test]
+    fn a_copy_that_already_arrived_is_never_mistaken_for_one_still_coming() {
+        let world = world_with(
+            vec![
+                release("Das Boot 1981 1080p BluRay x264-A", 2.0, 900),
+                release("Das Boot 1981 720p WEB x264-B", 1.4, 400),
+            ],
+            200 * GIGABYTE,
+        );
+        let first = grab_first(&world);
+
+        world.downloader.queue.lock().expect("not poisoned").clear();
+        world
+            .downloader
+            .history
+            .lock()
+            .expect("not poisoned")
+            .push(HistoryItem {
+                id: first,
+                name: "Das Boot".into(),
+                succeeded: true,
+                status: "SUCCESS/ALL".into(),
+                directory: None,
+                size_mb: 2000,
+                total_articles: 6000,
+                failed_articles: 0,
+                health_percent: 100.0,
+            });
+        world.orchestrator.progress();
+
+        // she asks for a different copy of the film she now has
+        let swapped = world
+            .orchestrator
+            .grab(0, Some(1), false, Some(first))
+            .expect("a swap");
+        assert_ne!(
+            swapped.id, first,
+            "a swap that hands back the copy she already has downloads nothing"
+        );
+        assert!(!swapped.already);
+        assert_eq!(
+            world
+                .downloader
+                .appended
+                .lock()
+                .expect("not poisoned")
+                .len(),
+            2,
+            "the second copy was really asked for"
         );
     }
 

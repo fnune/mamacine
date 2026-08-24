@@ -46,6 +46,7 @@ const SETTINGS = {
 function start({
   films = FILMS, seasons = SEASONS, finished = [], active = [], shelf = [],
   have = null, downloading = null, grabbed = { id: 7, already: false }, settings = SETTINGS,
+  copies = { index: 0, series: false, versions: VERSIONS },
   fail = null, holdSuggest = false,
   versions = VERSIONS, suggestions = [], free_bytes = 442_000_000_000, free_space = '412 GB',
   problem = null, searchNotice = null, searchExact = null, synopsis = '', seasonEpisodes = [],
@@ -80,6 +81,7 @@ function start({
       }
       case 'have': return { have, downloading };
       case 'versions': return versions;
+      case 'copies': return copies;
       case 'grab': return grabbed;
       case 'progress':
         return { ...live, total_space: '953 GB', total_bytes: 1_023_000_000_000 };
@@ -866,6 +868,42 @@ test('a settled download is retired by walking away from it', async () => {
     'and that is her own copy of it, opened');
   assert.ok(!app.document.querySelector('nav button[data-screen="film"]'),
     'the pill retires with it, rather than riding the masthead finished');
+});
+
+// A swap is started from her own film's page, and what lands is a new record: leaving her where
+// she was showed her the copy she had just asked to change, with nothing saying the new one had
+// arrived. The bar flashed at zero and vanished and the film on screen never changed.
+test('a swap ends on the copy that landed, not on the one it replaced', async () => {
+  const app = start({
+    shelf: [{ id: 4, title: 'La virgen roja', year: '2024', cover_url: null,
+              subtitle_note: '', languages: {}, series: false }],
+    copies: { index: 0, series: false, versions: VERSIONS },
+    grabbed: { id: 11, already: false },
+  });
+  await app.poll();
+  await openOwned(app);
+
+  click(app, app.document.getElementById('show-copies'));
+  await settle();
+  click(app, app.document.querySelector('.version button.pick'));
+  await settle();
+  click(app, [...app.document.querySelectorAll('.version button')]
+    .find((button) => button.textContent.includes('Sí, cambiar')));
+  await settle();
+
+  const grab = app.calls.find((call) => call.command === 'grab');
+  assert.equal(grab.args.replacing, 4, 'the copy she has is what it replaces');
+
+  app.live.active = [];
+  app.live.finished = [
+    { id: 11, title: 'La virgen roja', ok: true, retrying: false, next_id: null, detail: '',
+      subtitle_note: '', cover_url: null, year: '2024', languages: {}, series: false,
+      attempt: 1, attempts_total: 1, untried: 0, story: [] },
+  ];
+  await app.poll();
+
+  const opened = app.calls.filter((call) => call.command === 'library_synopsis');
+  assert.equal(opened[opened.length - 1].args.id, 11, 'the page follows the copy that landed');
 });
 
 // She was somewhere else when it landed. The notification already told her, and taking the

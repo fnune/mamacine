@@ -126,7 +126,14 @@ impl Finisher {
             if !item.succeeded {
                 continue;
             }
-            if self.library.get(item.id).map(|entry| entry.settled) == Some(true) {
+            // a record she has finished with is not settled again, however succeeded nzbget
+            // still calls the download behind it
+            if self
+                .library
+                .get(item.id)
+                .map(|entry| entry.settled || entry.retired)
+                == Some(true)
+            {
                 continue;
             }
             self.settle(&item);
@@ -176,9 +183,8 @@ impl Finisher {
                     folder.display()
                 ));
                 self.library.update(replaced, |entry| {
-                    entry.folder = None;
+                    entry.retired = true;
                     entry.file = None;
-                    entry.settled = false;
                 });
                 self.library.note(
                     replaced,
@@ -853,8 +859,10 @@ mod tests {
             std::slice::from_ref(&old)
         );
         assert!(!old.exists());
-        assert!(library.get(1).expect("the old record").folder.is_none());
-        assert!(!library.get(1).expect("the old record").settled);
+        // the record keeps saying where the copy was; what changes is that it is hers no longer,
+        // so nothing settles it again and nothing goes looking for a folder to give it back
+        assert!(library.get(1).expect("the old record").retired);
+        assert!(!library.get(1).expect("the old record").present());
         assert_eq!(
             library.get(2).expect("the new record").replaces,
             None,
@@ -902,6 +910,83 @@ mod tests {
 
         assert!(bin.0.lock().expect("not poisoned").is_empty());
         assert!(shared.exists(), "the film she waited for is still there");
+    }
+
+    // Clearing `settled` to mean "she has not got this" put the record straight back in the
+    // finisher's path: nzbget still calls that download succeeded, so the next sweep settled it
+    // again onto whatever folder its history named, and the record she had just retired came
+    // back pointing at the copy that replaced it.
+    #[test]
+    fn a_record_she_has_finished_with_is_never_settled_again() {
+        let directory = std::env::temp_dir().join("mama-cine-resettle");
+        let _ = std::fs::remove_dir_all(&directory);
+        let landed = directory.join("The red virgin");
+        std::fs::create_dir_all(&landed).expect("a folder");
+        std::fs::write(landed.join("film.mkv"), b"not really a film").expect("a film");
+
+        let log = std::sync::Arc::new(crate::log::Log::open(&directory));
+        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        library.update(1, |entry| {
+            entry.title = "The red virgin".into();
+            entry.retired = true;
+        });
+
+        struct Remembers;
+        impl Downloader for Remembers {
+            fn append(&self, _: &str, _: &[u8]) -> Result<i64> {
+                Ok(0)
+            }
+            fn queue(&self) -> Result<Vec<mamacine_core::nzbget::QueueItem>> {
+                Ok(Vec::new())
+            }
+            fn history(&self) -> Result<Vec<HistoryItem>> {
+                Ok(vec![HistoryItem {
+                    id: 1,
+                    name: "The red virgin".into(),
+                    succeeded: true,
+                    status: "SUCCESS/ALL".into(),
+                    directory: None,
+                    size_mb: 1,
+                    total_articles: 1,
+                    failed_articles: 0,
+                    health_percent: 100.0,
+                }])
+            }
+            fn download_rate(&self) -> Result<u64> {
+                Ok(0)
+            }
+            fn cancel(&self, _: i64) -> Result<()> {
+                Ok(())
+            }
+            fn forget(&self, _: i64) -> Result<()> {
+                Ok(())
+            }
+            fn check_server(
+                &self,
+                _: &mamacine_core::settings::NewsServer,
+            ) -> mamacine_core::nzbget::ServerCheck {
+                mamacine_core::nzbget::ServerCheck::Unknown
+            }
+        }
+
+        let finisher = Finisher {
+            downloader: Box::new(Remembers),
+            subtitles: Box::new(Silent),
+            library: std::sync::Arc::clone(&library),
+            log,
+            language: "es".into(),
+            remover: std::sync::Arc::new(Binned::default()),
+            notify: Box::new(|_, _| {}),
+        };
+        finisher.sweep();
+
+        let entry = library.get(1).expect("the record");
+        assert!(entry.retired, "it is still hers no longer");
+        assert!(
+            !entry.settled,
+            "and the sweep did not put it back on her shelf"
+        );
+        assert!(!entry.present());
     }
 
     // Nothing is thrown away for a download that was never a swap.

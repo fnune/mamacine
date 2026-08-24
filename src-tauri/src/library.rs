@@ -77,6 +77,15 @@ pub struct Entry {
     /// The nzb address of the copy this download actually fetched: what gets burned when the
     /// downloader refuses it.
     pub source: String,
+    /// She does not have this any more: she deleted it, she swapped it for another copy, or it
+    /// was a second record of a film one record already accounted for.
+    ///
+    /// Said outright rather than left to be inferred from an empty folder, because every way of
+    /// inferring it has been wrong. Clearing `settled` made the finisher settle the record again
+    /// on the next sweep, straight back onto whatever folder nzbget's history still named;
+    /// clearing `folder` made the startup repair go looking for a folder with her title in it and
+    /// hand over the copy that had replaced this one. A record that says what it is stops both.
+    pub retired: bool,
     /// The copy she is swapping out. She asked for a different one because the one she had was
     /// in the wrong language, so the old folder goes to the papelera the moment this one lands
     /// — never before, because a swap that fails must leave her the film she already had.
@@ -87,7 +96,8 @@ impl Entry {
     /// On the shelf only once it is both finished and still there. A folder she emptied herself is
     /// a film she no longer has, and the app must not claim otherwise.
     pub fn present(&self) -> bool {
-        self.settled
+        !self.retired
+            && self.settled
             && self
                 .folder
                 .as_ref()
@@ -235,7 +245,7 @@ impl Library {
     pub fn reconcile(&self, destination: &Path) {
         self.release_ghosts();
         for (id, entry) in self.all() {
-            if !entry.settled {
+            if !entry.settled || entry.retired {
                 continue;
             }
             let missing = entry
@@ -278,7 +288,7 @@ impl Library {
         let mut claimed = std::collections::HashSet::new();
         let mut ghosts = Vec::new();
         for (id, entry) in self.all() {
-            let Some(folder) = entry.folder.filter(|_| entry.settled) else {
+            let Some(folder) = entry.folder.filter(|_| entry.settled && !entry.retired) else {
                 continue;
             };
             if !claimed.insert(folder.clone()) {
@@ -291,10 +301,9 @@ impl Library {
         }
         for id in ghosts {
             self.update(id, |entry| {
+                entry.retired = true;
                 entry.folder = None;
                 entry.file = None;
-                // never settled anywhere, so nothing goes looking for a folder to give it back
-                entry.settled = false;
             });
         }
     }

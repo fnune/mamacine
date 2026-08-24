@@ -1117,8 +1117,11 @@ function App() {
       // watching it come down, the app goes where the film now is; if she is somewhere else,
       // the notification has already told her and nothing takes the screen out from under her.
       if (watching?.status === 'done') {
+        // 'owned' is where a swap is started from, and the copy that lands is a new record: the
+        // page she is on is about the one being replaced, so leaving her there showed her the
+        // copy she had just changed, with nothing to say the new one was here.
         const looking = now.screen === 'film'
-          || (now.screen === 'detail' && downloadingId === watching.id);
+          || (['detail', 'owned'].includes(now.screen) && downloadingId === watching.id);
         change({
           progress, watching: null, downloadingId: null, problem: progress.problem || null,
         });
@@ -1338,6 +1341,12 @@ function App() {
         const grabbed = await invoke('grab', {
           index: copies.index, version, series: copies.series, replacing: ownedId,
         });
+        // nothing was started, so there is nothing to watch: saying otherwise left a bar at zero
+        // that emptied itself a second later
+        if (grabbed.already) {
+          change({ starting: false, watching: null });
+          return;
+        }
         change({
           watching: { ...latest.current.watching, id: grabbed.id },
           downloadingId: grabbed.id,
