@@ -4,7 +4,7 @@ A desktop app for giving a less technical friend or relative a way to use your u
 
 They type a title. The app finds a copy, downloads it, fetches subtitles when the copy has none they can read, and puts it on the shelf. Whole seasons of television work the same way, with an episode list to choose from. Everything else, which of nine copies is worth the bandwidth, whether the repair data is real, what to do when a copy arrives broken, is the app's job, and it is done without asking.
 
-![Searching for a film, a film's page, and a season with its episodes](docs/screens.png)
+![Searching for a film, and a season with its episodes](docs/screens.png)
 
 It was built for one person, the author's mother, and that constraint is the design brief: no domain vocabulary on screen, no decision the app could have made itself, failures reported calmly and accurately.
 
