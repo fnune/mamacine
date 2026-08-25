@@ -1,12 +1,7 @@
-//! Getting films: the decisions between the window and the services, owned by one testable thing.
-//!
-//! Everything volatile arrives as a trait object, so every behaviour here can be exercised with
-//! fakes: the four rounds of field bugs all lived in this layer, back when it was welded to the
-//! real network inside the composition root.
-
 use crate::library::{Entry, Library};
 use crate::log::Log;
 use crate::messages;
+use crate::text::Lang;
 use mamacine_core::films::{group, Film};
 use mamacine_core::identity::{film_key, season_key};
 use mamacine_core::indexer::{Category, Indexer, Query, SearchResult, ShowIds};
@@ -22,12 +17,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-/// How many copies are tried before giving up. Chasing every copy the indexer listed spent 200 GB
-/// and a day to arrive at "no"; three failures in a row say the rest are not worth her bandwidth.
 pub const CHASE_LIMIT: usize = 3;
 
-/// How much room is left where her films go, and how big that disk is. Behind a trait so a test
-/// can fill the disk.
 pub trait Disk: Send + Sync {
     fn space(&self, path: &Path) -> Option<crate::disk::Space>;
 }
@@ -40,12 +31,10 @@ impl Disk for SystemDisk {
     }
 }
 
-/// Deleting a film she asked to remove. Behind a trait so a test never touches a real bin.
 pub trait Remover: Send + Sync {
     fn remove(&self, folder: &Path) -> Result<(), String>;
 }
 
-/// The recycle bin rather than deletion: a mistaken tap must be recoverable by anyone.
 pub struct SystemRemover;
 
 impl Remover for SystemRemover {
@@ -54,19 +43,13 @@ impl Remover for SystemRemover {
     }
 }
 
-/// Title suggestions as she types, and what picking one means. Behind a trait so a test can
-/// answer instantly, and because there are two providers: TMDB when a key is configured (titles
-/// in her language, the original named outright), the keyless IMDb lookup otherwise.
 pub trait Suggest: Send + Sync {
     fn suggest(&self, text: &str) -> mamacine_core::error::Result<Vec<Suggestion>>;
     fn resolve(&self, suggestion: &Suggestion) -> mamacine_core::error::Result<Picked>;
     fn poster(&self, url: &str) -> mamacine_core::error::Result<(String, Vec<u8>)>;
-    /// What the film is about, by IMDb id. Only TMDB can say; the default is the honest silence
-    /// of a provider that has no words for it.
     fn synopsis(&self, _imdb: &str) -> mamacine_core::error::Result<Option<String>> {
         Ok(None)
     }
-    /// The episodes a run of seasons holds, named where the provider names them.
     fn episodes(
         &self,
         _show: &ShowIds,
@@ -75,17 +58,11 @@ pub trait Suggest: Send + Sync {
     ) -> mamacine_core::error::Result<Vec<Episode>> {
         Ok(Vec::new())
     }
-    /// Which show a name is, for a season she already owns whose search is long gone. A different
-    /// question from suggesting titles as she types: there is one right answer and she is not
-    /// there to choose. Empty ids mean the provider could not say, which is an answer.
     fn show_named(&self, _name: &str) -> mamacine_core::error::Result<ShowIds> {
         Ok(ShowIds::default())
     }
 }
 
-/// The provider that needs no key: IMDb names the titles she is offered, TVMaze turns the one she
-/// picks into the ids an indexer files television under. Two services because neither does both,
-/// and no key for either, which is what makes this the default.
 pub struct Keyless<H> {
     titles: mamacine_core::lookup::Lookup<H>,
     shows: mamacine_core::tvmaze::TvMaze<H>,
@@ -104,9 +81,6 @@ impl<H: mamacine_core::http::HttpClient + Send + Sync> Suggest for Keyless<H> {
     fn suggest(&self, text: &str) -> mamacine_core::error::Result<Vec<Suggestion>> {
         self.titles.suggest(text)
     }
-    /// A show costs one more question, to the only service that answers it without a key. When it
-    /// cannot be reached the pick fails, and the window falls back to searching by the name she
-    /// picked, which is what a nameless pick would have done anyway.
     fn resolve(&self, suggestion: &Suggestion) -> mamacine_core::error::Result<Picked> {
         let picked = mamacine_core::lookup::resolve(suggestion);
         let Some(imdb) = picked.show.imdb.clone() else {
@@ -165,22 +139,14 @@ impl<H: mamacine_core::http::HttpClient + Send + Sync> Suggest for mamacine_core
     }
 }
 
-/// A video in a season's folder: its file name, the season and episode that name states, and
-/// where it is.
 type EpisodeFile = (String, Option<(u32, u32)>, PathBuf);
 
-/// Something she should see even if the window is closed or she is on another screen.
 pub type Notify = Box<dyn Fn(&str, &str) + Send + Sync>;
 
-/// A download and what to do when it turns out to be dead: the release that failed is abandoned
-/// and the next best one is started, without asking.
 pub struct Attempt {
     pub seed: Entry,
-    /// Untried copies, best first. The chase stops after `CHASE_LIMIT` failures, but the rest
-    /// stay listed so "probar más copias" is a real button rather than a new search.
     pub remaining: Vec<SearchResult>,
     pub total: usize,
-    /// The name nzbget files it under, kept so every copy lands in the same place.
     pub name: String,
 }
 
@@ -196,8 +162,6 @@ pub struct FilmCard {
     pub size: String,
     pub size_bytes: u64,
     pub room: &'static str,
-    /// How much this looks like what she typed. The window orders the mixed list by it, so the
-    /// thing she named is not buried under everything that merely mentions it.
     pub relevance: f64,
 }
 
@@ -205,7 +169,6 @@ pub struct FilmCard {
 pub struct SeasonCard {
     pub index: usize,
     pub show: String,
-    /// The show's own IMDb id, when the search knew which show this is.
     pub imdb: Option<String>,
     pub label: String,
     pub size: String,
@@ -217,35 +180,24 @@ pub struct SeasonCard {
     pub relevance: f64,
 }
 
-/// One episode of a season she owns, as the screen that plays it needs it.
 #[derive(Default, Serialize)]
 pub struct EpisodeRow {
     pub label: String,
-    /// Subtitles she can read, beside the file or inside it.
     pub subtitles: bool,
-    /// What the show database calls it, and what happens in it. Absent for a file whose number
-    /// could not be read, and for a season downloaded before the app kept the show's ids.
     pub title: Option<String>,
     pub overview: Option<String>,
     pub season: Option<u32>,
     pub number: Option<u32>,
 }
 
-/// One search, answered with everything it found: films and whole seasons in the same list, so
-/// which kind a name belongs to is the app's problem rather than a chip she has to press first.
 #[derive(Serialize)]
 pub struct Found {
     pub films: Vec<FilmCard>,
     pub seasons: Vec<SeasonCard>,
-    /// A place that could not answer, named. The rest of the results still stand.
     pub notice: Option<String>,
-    /// The search knew which title she meant, whether she picked it, typed its id or typed its
-    /// name. An empty answer then means the sites do not carry it, and saying "no hay nada con ese
-    /// nombre" would blame her for their gaps.
     pub exact: bool,
 }
 
-/// One release of a film, described as she would judge it rather than as it is named.
 #[derive(Serialize)]
 pub struct Version {
     pub index: usize,
@@ -253,17 +205,12 @@ pub struct Version {
     pub size: String,
     pub size_bytes: u64,
     pub language: String,
-    /// The language group a chip can stand for: "es", "latino" or "original".
     pub voice: &'static str,
     pub grabs: u64,
     pub chosen: bool,
     pub name: String,
-    /// Whether it fits on her disk, decided by the same rule that will later refuse it.
     pub room: &'static str,
-    /// The room it actually needs while it downloads and unpacks, which is more than its size:
-    /// the number behind the warning, so the warning never has to be taken on faith.
     pub needs: String,
-    /// How long it will take at the speed downloads have actually run at, when that is known.
     pub minutes: Option<i64>,
 }
 
@@ -295,12 +242,9 @@ pub struct Finished {
     pub languages: MediaInfo,
     pub series: bool,
     pub next_id: Option<i64>,
-    /// It failed, but the app has not decided what to do yet: the screen must keep waiting
-    /// rather than flash a failure that is about to be untrue.
     pub retrying: bool,
     pub attempt: usize,
     pub attempts_total: usize,
-    /// Copies kept beyond the chase limit: what "probar más copias" would try.
     pub untried: usize,
     pub story: Vec<crate::library::Note>,
 }
@@ -316,7 +260,6 @@ pub struct Shelved {
     pub series: bool,
 }
 
-/// The other copies of a film she owns, with the handle that lets one of them be started.
 #[derive(Serialize)]
 pub struct Copies {
     pub index: usize,
@@ -324,7 +267,6 @@ pub struct Copies {
     pub versions: Vec<Version>,
 }
 
-/// What the detail screen needs to not lie: on the shelf, on its way, or neither.
 #[derive(Serialize)]
 pub struct Owned {
     pub have: Option<i64>,
@@ -344,16 +286,11 @@ pub struct Progress {
     pub shelf: Vec<Shelved>,
     pub free_space: String,
     pub free_bytes: u64,
-    /// The whole disk, so "quedan 40 GB" can be judged: 40 of 100 and 40 of 4000 are different
-    /// facts, and hiding either is deciding for her.
     pub total_space: String,
     pub total_bytes: u64,
-    /// The downloader stopped answering: said plainly instead of freezing the screen in place.
     pub problem: Option<String>,
 }
 
-/// What the tray icon shows: the tooltip on hover, and the same thing in one line for the menu,
-/// which is where Linux has to read it because a tray tooltip is a Windows idea.
 pub struct TrayReport {
     pub tooltip: String,
     pub summary: String,
@@ -367,40 +304,26 @@ pub struct Orchestrator {
     pub destination: PathBuf,
     pub news: NewsServer,
     pub preference: Preference,
-    /// The language her subtitles are in, so a screen can say which episodes have none.
     pub subtitle_language: String,
     pub disk: Box<dyn Disk>,
     pub remover: Box<dyn Remover>,
     pub suggestions: Box<dyn Suggest>,
     pub prober: Box<dyn mamacine_core::nntp::Prober>,
     pub notify: Notify,
+    pub lang: Lang,
     covers: Mutex<HashMap<String, String>>,
     found: Mutex<Vec<Film>>,
     seasons: Mutex<Vec<Season>>,
     attempts: Mutex<HashMap<i64, Attempt>>,
-    /// Films whose chase is waiting for the news server to come back. Their attempts stay in
-    /// `attempts`; a server problem is transient and must never consume a film.
     stalled: Mutex<std::collections::HashSet<i64>>,
-    /// What is wrong with the news server right now, in her words, shown as the banner.
     server_trouble: Mutex<Option<String>>,
     server_checked: Mutex<Option<std::time::Instant>>,
-    /// How long between retries while the server is down. Public so tests need not wait.
     pub server_recheck: std::time::Duration,
-    /// The last suggestions and the text they answer, so a tap can name one by position rather
-    /// than post a struct back, and so submitting right after typing reuses what was fetched.
     suggested: Mutex<(String, Vec<Suggestion>)>,
-    /// What she last picked, kept here rather than sent to the window and back: the ids a show is
-    /// filed under are ours to use and nothing the window could interpret.
     picked: Mutex<Option<Picked>>,
-    /// Which show the seasons on screen belong to, when the search knew. Empty after a search by
-    /// name, where the packs are whatever the indexer matched and no show was identified.
     searched_show: Mutex<ShowIds>,
-    /// The episodes of a season, by show and season, asked of the show database once.
     listed: Mutex<HashMap<String, Vec<Episode>>>,
-    /// The best download rate seen this session, for "tardará unos X minutos" estimates.
     last_rate: Mutex<u64>,
-    /// What each film is about, by IMDb id. An empty answer is kept too: the database saying
-    /// nothing once is not a reason to ask it again.
     synopses: Mutex<HashMap<String, String>>,
 }
 
@@ -418,6 +341,7 @@ pub struct Pieces {
     pub suggestions: Box<dyn Suggest>,
     pub prober: Box<dyn mamacine_core::nntp::Prober>,
     pub notify: Notify,
+    pub lang: Lang,
 }
 
 impl Orchestrator {
@@ -436,6 +360,7 @@ impl Orchestrator {
             suggestions: pieces.suggestions,
             prober: pieces.prober,
             notify: pieces.notify,
+            lang: pieces.lang,
             covers: Mutex::new(HashMap::new()),
             found: Mutex::new(Vec::new()),
             seasons: Mutex::new(Vec::new()),
@@ -451,9 +376,7 @@ impl Orchestrator {
             last_rate: Mutex::new(0),
             synopses: Mutex::new(HashMap::new()),
         };
-        // a download interrupted by closing the window keeps the copies it had left to try
         for (id, entry) in orchestrator.library.all() {
-            // a gave-up film keeps its untried copies for the button, not for a silent resume
             if entry.settled || entry.gave_up || entry.remaining.is_empty() {
                 continue;
             }
@@ -473,11 +396,13 @@ impl Orchestrator {
         orchestrator
     }
 
-    // --- search ------------------------------------------------------------------
+    fn wanted_language(&self) -> &'static str {
+        if let Preference::Language(code) = self.preference {
+            return code;
+        }
+        mamacine_core::release::known_language(&self.subtitle_language).unwrap_or("es")
+    }
 
-    /// `kind` is what is already known about the name: a suggestion she picked says whether it is
-    /// a film or a series, and asking the other category anyway buried the seasons she chose
-    /// under a wall of parodies and episode reviews.
     pub fn search(
         &self,
         query: &str,
@@ -498,45 +423,30 @@ impl Orchestrator {
                 .map(|(name, indexer)| (name.as_str(), indexer.as_ref()))
         };
         if self.indexers.is_empty() {
-            return Err(
-                "No hay ningún buscador configurado. Hay que rellenar los ajustes primero."
-                    .to_string(),
-            );
+            return Err(self.lang.no_indexer_configured().to_string());
         }
 
         let nothing = || mamacine_core::search::Gathered {
             results: Vec::new(),
             problems: Vec::new(),
         };
-        // she typed a name and pressed Buscar, which must mean what tapping the first row means:
-        // work out what it names, then ask the indexer for that. An id she typed already names one
-        // film, and a suggestion she tapped arrived identified.
         let identified = match (&parsed, kind) {
             (Query::Imdb(_), _) | (_, Some(_)) => Vec::new(),
             _ => self.identify(query),
         };
         let identified_as = |series: bool| identified.iter().find(|found| found.series == series);
-        // an id names one title beyond doubt, but a name she typed still has to say whether she
-        // meant the film or the series of the same name. The provider offered them in an order,
-        // and that order is its own answer: what it put first is what the name means, and the
-        // other kind stays on the screen below it rather than tying with it.
+        const IDENTIFIED: f64 = 3.0;
+        const IDENTIFIED_AS_THE_OTHER_KIND: f64 = 2.0;
         let certain = |series: bool| match identified.first() {
-            Some(first) if first.series != series => 2.0,
-            _ => 3.0,
+            Some(first) if first.series != series => IDENTIFIED_AS_THE_OTHER_KIND,
+            _ => IDENTIFIED,
         };
 
-        // the film she meant, asked for by whatever names it: an IMDb id where the provider
-        // registers one, the international name where it does not. Her own words are the question
-        // of last resort, for when nothing recognised them at all: a provider that answered with a
-        // series and no film has said there is no film, and asking anyway spends a search hit to
-        // be told the same thing in noise.
         let film_question = match (identified_as(false), identified.is_empty()) {
             (Some(film), _) => Query::parse(&film.query),
             (None, true) => Some(parsed.clone()),
             (None, false) => None,
         };
-        // the name an answer has to resemble, or nothing at all when the question named one film
-        // outright and there is no room left for the indexer to have misunderstood
         let judge_films_by = match &film_question {
             None | Some(Query::Imdb(_)) => None,
             Some(_) => Some(
@@ -558,16 +468,10 @@ impl Orchestrator {
                 .unwrap_or_default(),
         };
         *self.searched_show.lock().expect("not poisoned") = show.clone();
-        // the name the packs carry, which the indexer only falls back on when no id identified the
-        // show. Her own words are the last resort, the same as for a film.
         let show_named = identified_as(true)
             .map(|found| found.query.as_str())
             .unwrap_or(query);
-        // the same last resort as a film's: television is asked for the show that was identified,
-        // or for her words when nothing at all was, and not at all when the name turned out to
-        // mean a film
         let television = identified.is_empty() || identified_as(true).is_some();
-        // an id names one film exactly; asking television for it would answer with noise
         let seasons_found = match &parsed {
             Query::Imdb(_) => nothing(),
             _ if kind == Some("film") => nothing(),
@@ -575,7 +479,6 @@ impl Orchestrator {
             _ => gather(
                 indexers(),
                 &Query::Show {
-                    // releases are filed in scene ASCII, so the name rung has to be folded too
                     name: mamacine_core::search::fold(show_named.trim()),
                     ids: show.clone(),
                 },
@@ -596,8 +499,6 @@ impl Orchestrator {
 
         let free = self.disk.space(&self.destination).map(|space| space.free);
         let mut films = group(films_found.results, self.preference);
-        // an id search answers with exactly the film she picked, so every group is that film and
-        // may carry the name she picked it under; the picked name then follows it everywhere
         if let (Query::Imdb(_), Some(name)) = (&parsed, shown) {
             for film in &mut films {
                 film.title = name.to_string();
@@ -615,7 +516,7 @@ impl Orchestrator {
                 cover_url: film.cover_url.clone(),
                 quality: film
                     .best()
-                    .map(definition_of)
+                    .map(|release| definition_of(release, self.lang))
                     .unwrap_or_default()
                     .to_string(),
                 size: film.best().map(size_of).unwrap_or_default(),
@@ -626,18 +527,12 @@ impl Orchestrator {
                 ),
                 relevance: match judge_films_by {
                     Some(asked) => looks_like(asked, &film.title, &film.releases),
-                    // asked by an id, which names one film: whatever came back is that film
                     None => certain(false),
                 },
             })
-            // sharing not one word with what she typed, in the card or in any release, is the
-            // indexer free-associating: "el sur" answered with Tinker Bell and Pumpkinhead
             .filter(|card| card.relevance > 0.0)
             .collect();
 
-        // asked by id, every pack that came back is that one show under whichever name it was
-        // released: it takes the name the show was identified as, not the words she reached for
-        // it with, and there is nothing left to second-guess
         let named = show.any().then(|| {
             shown
                 .or(identified_as(true).map(|found| found.title.as_str()))
@@ -651,12 +546,12 @@ impl Orchestrator {
                 index,
                 show: season.show.clone(),
                 imdb: show.imdb.clone(),
-                label: season.label.clone(),
+                label: self.lang.season_label(season.first, season.last),
                 size: season.best().map(size_of).unwrap_or_default(),
                 size_bytes: season.best().map(|release| release.size_bytes).unwrap_or(0),
                 quality: season
                     .best()
-                    .map(|release| definition_of(release).to_string())
+                    .map(|release| definition_of(release, self.lang).to_string())
                     .unwrap_or_default(),
                 cover_url: season
                     .releases
@@ -692,14 +587,11 @@ impl Orchestrator {
         })
     }
 
-    /// Each indexer that could not answer, with what actually happened to it: a rejected key, a
-    /// spent quota and a dead connection call for different actions, and one vague sentence for
-    /// all three hid the one fact she could have acted on. The english detail goes to the log.
     fn explain_problems(&self, problems: &[(String, mamacine_core::error::Error)]) -> String {
         problems
             .iter()
             .map(|(name, error)| {
-                let explained = messages::explain(error);
+                let explained = messages::explain(error, self.lang);
                 self.log.line(&format!("search: {name}: {}", explained.why));
                 format!("{name}: {}", explained.said)
             })
@@ -711,13 +603,11 @@ impl Orchestrator {
         let found = self
             .suggestions
             .suggest(text)
-            .map_err(|failure| messages::explain(&failure).said)?;
+            .map_err(|failure| messages::explain(&failure, self.lang).said)?;
         *self.suggested.lock().expect("not poisoned") = (text.to_string(), found.clone());
         Ok(found)
     }
 
-    /// What a tapped suggestion means: the query the indexer can answer, and the name everything
-    /// downstream should call the thing.
     pub fn pick(&self, index: usize) -> Result<Picked, String> {
         let suggestion = self
             .suggested
@@ -726,18 +616,15 @@ impl Orchestrator {
             .1
             .get(index)
             .cloned()
-            .ok_or_else(|| "Ese título ya no está en la lista.".to_string())?;
+            .ok_or_else(|| self.lang.title_gone_from_list().to_string())?;
         let picked = self
             .suggestions
             .resolve(&suggestion)
-            .map_err(|failure| messages::explain(&failure).said)?;
+            .map_err(|failure| messages::explain(&failure, self.lang).said)?;
         *self.picked.lock().expect("not poisoned") = Some(picked.clone());
         Ok(picked)
     }
 
-    /// The suggestions for this text, reusing the ones the typing already fetched. The window
-    /// asks for them on every keystroke and submitting asks the same question again, and that
-    /// second question is a call somebody else is paying for.
     fn suggestions_for(&self, text: &str) -> Vec<Suggestion> {
         {
             let (asked, found) = &*self.suggested.lock().expect("not poisoned");
@@ -747,43 +634,19 @@ impl Orchestrator {
         }
         match self.suggestions.suggest(text) {
             Ok(found) => found,
-            // a title provider that cannot be reached costs her the translation, not the search
             Err(failure) => {
                 self.log.line(&format!(
                     "search: no suggestions for \"{text}\": {}",
-                    messages::explain(&failure).why
+                    messages::explain(&failure, self.lang).why
                 ));
                 Vec::new()
             }
         }
     }
 
-    /// What she means, worked out before an indexer is asked anything.
-    ///
-    /// Tapping a suggestion resolves the title and then searches by the id that names it. Typing
-    /// the same name and pressing Buscar used to send her words straight to an indexer, so the two
-    /// ways of starting a search answered differently: "El castillo ambulante" found the film when
-    /// tapped and nothing at all when typed, because the releases are named "Howl\'s Moving Castle"
-    /// and no indexer has ever heard of the Spanish name. She does not know the two are different.
-    /// So they are one thing: her words are identified first, exactly as a tap does it, and the
-    /// search that follows is the search a tap would have run.
-    ///
-    /// The best film and the best series, because a typed name says which of the two it is only
-    /// when she picks a row. What the provider offered is taken as it stands: matching a name in
-    /// any language to the thing it names is the one job it has, and it does it against a list of
-    /// aliases nothing here can see. IMDb answers "juego de tronos" with "Game of Thrones" and
-    /// says nothing about why, and a check that the answer resembles the question would throw that
-    /// away. Where it recognised nothing, her own words are the question.
-    ///
-    /// The order is the provider's, and the first offer is its answer to which of the two she
-    /// meant.
     fn identify(&self, typed: &str) -> Vec<Picked> {
         let suggestions = self.suggestions_for(typed);
         let mut resolved: Vec<Picked> = Vec::new();
-        // walked in the provider's own order, so the first one resolved is the first one it
-        // offered, and one of each kind because a typed name says which it is only when tapped.
-        // One attempt each: a provider that could not resolve the best title it has will not do
-        // better with the next, and every attempt is a call somebody else is paying for.
         let (mut tried_film, mut tried_series) = (false, false);
         for suggestion in &suggestions {
             let tried = match suggestion.series {
@@ -796,19 +659,16 @@ impl Orchestrator {
             *tried = true;
             match self.suggestions.resolve(suggestion) {
                 Ok(picked) => resolved.push(picked),
-                // identifying it is what fails, not the search: her words are still a question
                 Err(failure) => self.log.line(&format!(
                     "search: \"{typed}\" looks like \"{}\", but: {}",
                     suggestion.title,
-                    messages::explain(&failure).why
+                    messages::explain(&failure, self.lang).why
                 )),
             }
         }
         resolved
     }
 
-    /// The ids of the show she picked, when the search that follows is for that same show. A name
-    /// she typed herself resolves to nothing, and the search asks by name.
     fn picked_show(&self, query: &str) -> ShowIds {
         self.picked
             .lock()
@@ -819,21 +679,19 @@ impl Orchestrator {
             .unwrap_or_default()
     }
 
-    // --- what a tap needs --------------------------------------------------------
-
     pub fn versions(&self, index: usize, series: bool) -> Result<Vec<Version>, String> {
         let releases = if series {
             let seasons = self.seasons.lock().expect("not poisoned");
             seasons
                 .get(index)
                 .map(|season| season.releases.clone())
-                .ok_or_else(|| "Esa temporada ya no está en los resultados.".to_string())?
+                .ok_or_else(|| self.lang.season_gone_from_results().to_string())?
         } else {
             let found = self.found.lock().expect("not poisoned");
             found
                 .get(index)
                 .map(|film| film.releases.clone())
-                .ok_or_else(|| "Esa película ya no está en los resultados.".to_string())?
+                .ok_or_else(|| self.lang.film_gone_from_results().to_string())?
         };
         let free = self.disk.space(&self.destination).map(|space| space.free);
         let rate = *self.last_rate.lock().expect("not poisoned");
@@ -842,11 +700,11 @@ impl Orchestrator {
             .enumerate()
             .map(|(position, release)| Version {
                 index: position,
-                quality: definition_of(release).to_string(),
+                quality: definition_of(release, self.lang).to_string(),
                 size: size_of(release),
                 size_bytes: release.size_bytes,
-                language: language_of(release),
-                voice: voice_of(release),
+                language: language_of(release, self.lang),
+                voice: voice_of(release, self.wanted_language()),
                 grabs: release.grabs,
                 chosen: position == 0,
                 name: release.title.clone(),
@@ -857,17 +715,11 @@ impl Orchestrator {
             .collect())
     }
 
-    /// The copies of something she already has, so that a film in the wrong language is one
-    /// decision rather than a delete and a fresh search.
-    ///
-    /// Asked for by hand rather than on every open: it is a question for the indexer, and her
-    /// own films have to open when nothing outside this computer is answering. The search it
-    /// runs is what leaves an index behind for `grab`, which is why the index comes back here.
     pub fn copies_of(&self, id: i64) -> Result<Copies, String> {
         let entry = self
             .library
             .get(id)
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())?;
         let query = match entry
             .imdb
             .as_deref()
@@ -876,11 +728,7 @@ impl Orchestrator {
         {
             Some(imdb) => format!("tt{}", imdb.trim_start_matches("tt")),
             None if !entry.title.is_empty() => entry.title.clone(),
-            None => {
-                return Err(
-                    "No sé lo suficiente sobre esta película para buscar otras copias.".to_string(),
-                )
-            }
+            None => return Err(self.lang.too_little_known_for_copies().to_string()),
         };
         let series = entry.series;
         let found = self.search(&query, Some(if series { "series" } else { "film" }), None)?;
@@ -889,8 +737,7 @@ impl Orchestrator {
         } else {
             found.films.first().map(|film| film.index)
         };
-        let index = index
-            .ok_or_else(|| "No he encontrado ninguna otra copia de esta película.".to_string())?;
+        let index = index.ok_or_else(|| self.lang.no_other_copy_found().to_string())?;
         Ok(Copies {
             index,
             series,
@@ -898,9 +745,6 @@ impl Orchestrator {
         })
     }
 
-    /// Whether she already has this — answered by her folder — and whether it is already on its
-    /// way. The detail screen offered "Descargar" for a season that was downloading at that very
-    /// moment, because it only knew about the shelf.
     pub fn have(&self, index: usize, series: bool) -> Owned {
         let Some(key) = self.key_at(index, series) else {
             return Owned {
@@ -924,11 +768,6 @@ impl Orchestrator {
         }
     }
 
-    // --- downloading -------------------------------------------------------------
-
-    /// `replacing` is her saying she knows she has this and wants a different copy of it: the
-    /// one she has spoke the wrong language. It is the only way past "ya la tienes", and the
-    /// copy it names is not touched until the new one has actually landed.
     pub fn grab(
         &self,
         index: usize,
@@ -943,25 +782,24 @@ impl Orchestrator {
                 .expect("not poisoned")
                 .get(index)
                 .cloned()
-                .ok_or_else(|| "Esa temporada ya no está en los resultados.".to_string())?;
+                .ok_or_else(|| self.lang.season_gone_from_results().to_string())?;
             let key = season_key(&season);
             let show = self.searched_show.lock().expect("not poisoned").clone();
+            let label = self.lang.season_label(season.first, season.last);
             let seed = Entry {
-                title: format!("{} · {}", season.show, season.label),
+                title: format!("{} · {label}", season.show),
                 cover_url: season
                     .releases
                     .iter()
                     .find_map(|release| release.cover_url.clone()),
                 series: true,
-                // what her own copy of this season is, kept while the search that found it is
-                // still on screen: her screen names its episodes from these long afterwards
                 imdb: show.imdb.clone(),
                 seasons: Some((season.first, season.last)),
                 show,
                 key: key.clone(),
                 ..Entry::default()
             };
-            let name = format!("{} {}", season.show, season.label);
+            let name = format!("{} {label}", season.show);
             (seed, season.releases, name, key)
         } else {
             let film = self
@@ -970,7 +808,7 @@ impl Orchestrator {
                 .expect("not poisoned")
                 .get(index)
                 .cloned()
-                .ok_or_else(|| "Esa película ya no está en los resultados.".to_string())?;
+                .ok_or_else(|| self.lang.film_gone_from_results().to_string())?;
             let key = film_key(&film);
             let seed = Entry {
                 title: film.title.clone(),
@@ -980,7 +818,6 @@ impl Orchestrator {
                 key: key.clone(),
                 ..Entry::default()
             };
-            // nzbget will only ever know the name; the film itself is remembered in the library
             let name = film.title.clone();
             (seed, film.releases, name, key)
         };
@@ -990,12 +827,11 @@ impl Orchestrator {
                 return Ok(Grabbed { id, already: true });
             }
         }
-        // a second press must follow the download that is already running, not start a twin
         if let Some(id) = self.in_flight(&key) {
             return Ok(Grabbed { id, already: false });
         }
 
-        let ordered = candidates_from(&releases, version);
+        let ordered = candidates_from(&releases, version, self.wanted_language());
         self.start(Attempt {
             total: ordered.len(),
             remaining: ordered,
@@ -1003,11 +839,6 @@ impl Orchestrator {
                 replaces: replacing,
                 ..seed
             },
-            // A swap is filed under a name of its own. Both copies of a film are appended to the
-            // downloader under the film's title, so a replacement landed in the folder of the
-            // copy it was replacing, and binning that folder took the copy she had just waited
-            // for. The number is the record it replaces, so a second swap cannot collide with
-            // the first.
             name: match replacing {
                 Some(replaced) => format!("{name} ({replaced})"),
                 None => name,
@@ -1016,11 +847,6 @@ impl Orchestrator {
         .map(|id| Grabbed { id, already: false })
     }
 
-    /// The download of this film that is still going, if there is one.
-    ///
-    /// "Still going" is asked of the downloader, never only of our own bookkeeping: an attempt
-    /// that outlived its download made this answer with an id that had finished hours ago, and
-    /// the caller then had nothing to wait for.
     fn in_flight(&self, key: &str) -> Option<i64> {
         let done: std::collections::HashSet<i64> = self
             .downloader
@@ -1052,94 +878,71 @@ impl Orchestrator {
         })
     }
 
-    /// Starts the first copy that fits on the disk, and keeps the rest for when it fails.
     fn start(&self, mut attempt: Attempt) -> Result<i64, String> {
         let total = attempt.total.max(attempt.remaining.len());
         if attempt.remaining.is_empty() {
-            return Err("No hay ninguna copia para descargar.".to_string());
+            return Err(self.lang.no_copy_to_download().to_string());
         }
         let free = self.disk.space(&self.destination).map(|space| space.free);
         let mut too_big = None;
         let mut trouble: Option<String> = None;
-        // a copy passed over is the app deciding something; each one becomes a line of the story
         let mut skipped: Vec<(String, String)> = Vec::new();
 
         while !attempt.remaining.is_empty() {
             let release = attempt.remaining.remove(0);
-            // asked before it starts, rather than discovered at ninety percent with a full disk
             if let Some(free) = free {
                 if mamacine_core::space::room_for(free, release.size_bytes)
                     == mamacine_core::space::Room::NotEnough
                 {
                     too_big.get_or_insert(release.size_bytes);
                     skipped.push((
-                        format!(
-                            "Una copia de {} no cabe en el disco, así que la he descartado.",
-                            gigabytes(release.size_bytes)
-                        ),
+                        self.lang
+                            .copy_discarded_for_space(&gigabytes(release.size_bytes)),
                         release.title.clone(),
                     ));
                     continue;
                 }
             }
             let Some(indexer) = self.indexer_for(&release.nzb_url) else {
-                trouble.get_or_insert("Ese buscador ya no está en los ajustes.".into());
+                trouble.get_or_insert(self.lang.indexer_gone_from_settings().into());
                 skipped.push((
-                    "No he podido pedir una de las copias, así que he pasado a la siguiente."
-                        .into(),
+                    self.lang.skipped_to_the_next_copy().into(),
                     format!("{}: no configured indexer", release.nzb_url),
                 ));
                 continue;
             };
-            // the downloader's past refusal is ground truth the probe cannot always predict:
-            // a copy proven dead must never cost her bandwidth twice
             if self.library.is_burned(&release.nzb_url) {
                 self.log
                     .line(&format!("skipping burned copy: {}", release.title));
-                trouble.get_or_insert(messages::NO_WORKING_COPY.to_string());
+                trouble.get_or_insert(self.lang.no_working_copy().to_string());
                 continue;
             }
             let nzb = match indexer.fetch_nzb(&release.nzb_url) {
                 Ok(nzb) => nzb,
                 Err(failure) => {
-                    let explained = messages::explain(&failure);
+                    let explained = messages::explain(&failure, self.lang);
                     self.log.line(&format!("start: {}", explained.why));
                     trouble.get_or_insert(explained.said);
-                    skipped.push((
-                        "No he podido pedir una de las copias, así que he pasado a la siguiente."
-                            .into(),
-                        explained.why,
-                    ));
+                    skipped.push((self.lang.skipped_to_the_next_copy().into(), explained.why));
                     continue;
                 }
             };
-            // asked before a byte is downloaded: nzbget can only prove a rotten copy by
-            // fetching gigabytes until the failure count is beyond repair, while a sampled
-            // STAT conversation knows in seconds. Inconclusive means nzbget decides. The skip
-            // is silent on her screen — nothing visible changed, so there is nothing to say —
-            // and the log keeps the numbers.
             if self.rotten(&release.title, &nzb).is_some() {
-                trouble.get_or_insert(messages::NO_WORKING_COPY.to_string());
+                trouble.get_or_insert(self.lang.no_working_copy().to_string());
                 continue;
             }
             let id = match self.downloader.append(&attempt.name, &nzb) {
                 Ok(id) => id,
                 Err(failure) => {
-                    let explained = messages::explain(&failure);
+                    let explained = messages::explain(&failure, self.lang);
                     self.log.line(&format!("start: {}", explained.why));
                     trouble.get_or_insert(explained.said);
-                    skipped.push((
-                        "No he podido pedir una de las copias, así que he pasado a la siguiente."
-                            .into(),
-                        explained.why,
-                    ));
+                    skipped.push((self.lang.skipped_to_the_next_copy().into(), explained.why));
                     continue;
                 }
             };
 
             let mut entry = attempt.seed.clone();
-            // counted by what nzbget was actually handed: a copy skipped by the probe or the
-            // disk cost her nothing and must not spend the chase allowance
             entry.attempt = attempt.seed.attempt + 1;
             entry.source = release.nzb_url.clone();
             entry.attempts_total = total;
@@ -1150,27 +953,17 @@ impl Orchestrator {
             for (said, why) in &skipped {
                 self.library.note(id, said, why);
             }
-            // the story belongs to the film, not to the copy, and starting a copy is a thing that
-            // happened to it
             self.library.note(
                 id,
-                &format!(
-                    "{} ({}).",
-                    if first {
-                        "Empieza la descarga"
-                    } else {
-                        "Empieza la descarga de otra copia"
-                    },
-                    gigabytes(release.size_bytes)
-                ),
+                &self
+                    .lang
+                    .download_starts(first, &gigabytes(release.size_bytes)),
                 &format!(
                     "intento {} (de hasta {total} copias): {}",
                     attempt.seed.attempt + 1,
                     release.title,
                 ),
             );
-            // the kept plan must carry the count forward, or the next copy would believe it is
-            // the first again and the chase limit would never arrive
             attempt.seed.attempt += 1;
             self.attempts
                 .lock()
@@ -1181,21 +974,22 @@ impl Orchestrator {
 
         if let Some(size) = too_big {
             let free = free.unwrap_or(0);
-            return Err(format!(
-                "No hay sitio en el disco. Hace falta un hueco de unos {} y quedan {}. \
-                 Quita alguna película que ya hayas visto y vuelve a intentarlo.",
-                gigabytes(mamacine_core::space::needed_for(size)),
-                gigabytes(free),
+            return Err(self.lang.no_room_on_disk(
+                &gigabytes(mamacine_core::space::needed_for(size)),
+                &gigabytes(free),
             ));
         }
-        Err(trouble.unwrap_or_else(|| "No se ha podido empezar la descarga.".to_string()))
+        Err(trouble.unwrap_or_else(|| self.lang.download_could_not_start().to_string()))
     }
 
-    /// The technical reason a copy is skipped without downloading, when the sample is certain.
-    /// A minimum of articles keeps the probe honest, and any failure to ask defers to nzbget.
     fn rotten(&self, title: &str, nzb: &[u8]) -> Option<String> {
+        const TOO_SMALL_TO_JUDGE: usize = 50;
+        const DATA_SAMPLE: usize = 300;
+        const PAR_SAMPLE: usize = 100;
+        const ANY_REAL_DAMAGE: f64 = 0.005;
+
         let contents = mamacine_core::nzb::read(nzb).ok()?;
-        if contents.data_ids.len() < 50 {
+        if contents.data_ids.len() < TOO_SMALL_TO_JUDGE {
             return None;
         }
         let ratio = |statuses: &[bool]| {
@@ -1205,7 +999,7 @@ impl Orchestrator {
                 statuses.iter().filter(|gone| **gone).count() as f64 / statuses.len() as f64
             }
         };
-        let ids = contents.sample(300);
+        let ids = contents.sample(DATA_SAMPLE);
         let missing = match self.prober.statuses(&self.news, &ids) {
             Ok(statuses) => ratio(&statuses),
             Err(failure) => {
@@ -1214,11 +1008,10 @@ impl Orchestrator {
                 return None;
             }
         };
-        // takedowns hit the repair data too — often first — so only surviving par counts
-        let par_ids = contents.sample_par(100);
+        let par_ids = contents.sample_par(PAR_SAMPLE);
         let par_missing = match self.prober.statuses(&self.news, &par_ids) {
             Ok(statuses) => ratio(&statuses),
-            Err(_) => 0.0, // unknown: assume the paper coverage, nzbget remains the backstop
+            Err(_) => 0.0,
         };
         let effective = contents.effective_par(par_missing);
         self.log.line(&format!(
@@ -1235,13 +1028,9 @@ impl Orchestrator {
                 effective * 100.0
             ));
         }
-        // damage within the paper coverage: worth one more question — is the repair data even
-        // real? Posts disguise data as ".par2" to dodge scanners; nzbget then finds nothing to
-        // repair with and any damage is fatal. Seen live: ten fake par2 volumes on one season.
-        if missing > 0.005 {
+        if missing > ANY_REAL_DAMAGE {
             let mut authentic = None;
             for id in contents.par_index_segments().into_iter().take(2) {
-                // a failed fetch is no evidence either way
                 if let Ok(bytes) = self.prober.fetch_body(&self.news, id) {
                     authentic = Some(mamacine_core::par2::contains_packets(&bytes));
                     if authentic == Some(true) {
@@ -1269,13 +1058,7 @@ impl Orchestrator {
             .map(|(_, indexer)| indexer.as_ref())
     }
 
-    // --- the chase ---------------------------------------------------------------
-
-    /// Watches for copies that turned out to be dead and quietly starts the next one. Usenet drops
-    /// articles as a release ages, so the first copy failing is expected rather than exceptional.
     pub fn chase(&self) {
-        // while the news server is down the chase waits and retries on its own: a transient
-        // outage must never consume a film, and hammering the server helps nobody
         if self.server_trouble.lock().expect("not poisoned").is_some() {
             let due = self
                 .server_checked
@@ -1299,7 +1082,7 @@ impl Orchestrator {
                         };
                         self.library.note(
                             id,
-                            "Ya puedo conectarme otra vez; sigo probando copias.",
+                            self.lang.server_back_trying_copies(),
                             "the news server answers again",
                         );
                         self.continue_after(id, attempt);
@@ -1309,17 +1092,16 @@ impl Orchestrator {
                     self.log
                         .line(&format!("news server still refusing: {reason}"));
                     *self.server_trouble.lock().expect("not poisoned") =
-                        Some(messages::SERVER_REFUSED.to_string());
+                        Some(self.lang.server_refused().to_string());
                     return;
                 }
                 ServerCheck::Unreachable(reason) => {
                     self.log
                         .line(&format!("news server still unreachable: {reason}"));
                     *self.server_trouble.lock().expect("not poisoned") =
-                        Some(messages::SERVER_UNREACHABLE.to_string());
+                        Some(self.lang.server_unreachable().to_string());
                     return;
                 }
-                // nothing was learned; keep waiting rather than flip state on no evidence
                 ServerCheck::Unknown => return,
             }
         }
@@ -1327,8 +1109,6 @@ impl Orchestrator {
         let Ok(history) = self.downloader.history() else {
             return;
         };
-        // only downloads that existed before this tick may be judged "vanished": one started a
-        // moment ago has not had time to appear anywhere yet
         let tracked_before: std::collections::HashSet<i64> = self
             .attempts
             .lock()
@@ -1338,16 +1118,10 @@ impl Orchestrator {
             .collect();
         for item in &history {
             if item.succeeded {
-                // A copy that arrived has nothing left to chase, and the attempt behind it was
-                // never dropped: it sat in this map for the rest of the run, and `in_flight` read
-                // it as a download still going. Asked for a different copy of a film she already
-                // had, the app handed back that finished id and started nothing, so the bar went
-                // to zero and straight to "lista para ver" without a byte being fetched.
                 self.attempts.lock().expect("not poisoned").remove(&item.id);
                 continue;
             }
             if abandoned_deliberately(&item.status) {
-                // she stopped it herself; carrying on behind her is the opposite of what she asked
                 self.attempts.lock().expect("not poisoned").remove(&item.id);
                 continue;
             }
@@ -1357,19 +1131,13 @@ impl Orchestrator {
                 .expect("not poisoned")
                 .contains(&item.id)
             {
-                continue; // already answered: waiting for the server, not for another discard note
+                continue;
             }
             let Some(attempt) = self.attempts.lock().expect("not poisoned").remove(&item.id) else {
-                // a failed copy nobody is handling: a crash between decisions, or state written
-                // by an older build. The screen presents an undecided failure as "working on
-                // it", so an orphan must be decided here or that would be a forever-state.
                 let Some(entry) = self.library.get(item.id) else {
                     continue;
                 };
                 if entry.settled || entry.gave_up || entry.superseded_by.is_some() {
-                    // already decided: nothing left to do but bury the corpse. A failed item
-                    // keeps its partial gigabytes in nzbget's work folder until somebody
-                    // deletes the history entry, and 48 GB of dead seasons proved nobody did.
                     if !entry.settled {
                         let _ = self.downloader.forget(item.id);
                     }
@@ -1377,7 +1145,7 @@ impl Orchestrator {
                 }
                 self.library.note(
                     item.id,
-                    messages::GAVE_UP_ON_THIS_COPY,
+                    self.lang.gave_up_on_this_copy(),
                     &format!("adopted orphan: {}", explain_failure(item)),
                 );
                 self.library.burn(&entry.source);
@@ -1397,14 +1165,12 @@ impl Orchestrator {
             };
             self.library.note(
                 item.id,
-                messages::GAVE_UP_ON_THIS_COPY,
+                self.lang.gave_up_on_this_copy(),
                 &explain_failure(item),
             );
             self.library
                 .burn(&self.library.get(item.id).unwrap_or_default().source);
             self.continue_after(item.id, attempt);
-            // the library and the story carry everything the screen needs; the corpse's partial
-            // gigabytes in nzbget's work folder carry nothing
             if !self
                 .stalled
                 .lock()
@@ -1415,9 +1181,6 @@ impl Orchestrator {
             }
         }
 
-        // a copy nzbget knows nothing about — not queued, not in history — is a copy it lost or
-        // rejected on arrival. Seen live: the library believed copy 5 of 7 was downloading and
-        // the screen said "empezando" forever, while nzbget had never heard of it.
         let Ok(queue) = self.downloader.queue() else {
             return;
         };
@@ -1443,26 +1206,21 @@ impl Orchestrator {
             };
             self.library.note(
                 id,
-                "Esa descarga se ha perdido por el camino, así que pruebo con otra copia.",
+                self.lang.download_vanished(),
                 "gone from nzbget: neither the queue nor the history knows the id",
             );
             self.continue_after(id, attempt);
         }
     }
 
-    /// One copy is dead or lost; what happens to the film now. The next copy inherits the story:
-    /// it is the same film, and she is owed the whole of it.
     fn continue_after(&self, id: i64, mut attempt: Attempt) {
-        // a run of dead copies and a broken account look identical from the failures alone;
-        // the downloader can ask the server. A server problem is transient and never consumes
-        // the film: the chase waits and retries on its own.
         match self.downloader.check_server(&self.news) {
             ServerCheck::Refused(reason) => {
-                self.stall(id, attempt, messages::SERVER_REFUSED, &reason);
+                self.stall(id, attempt, self.lang.server_refused(), &reason);
                 return;
             }
             ServerCheck::Unreachable(reason) => {
-                self.stall(id, attempt, messages::SERVER_UNREACHABLE, &reason);
+                self.stall(id, attempt, self.lang.server_unreachable(), &reason);
                 return;
             }
             ServerCheck::Working | ServerCheck::Unknown => {}
@@ -1470,20 +1228,20 @@ impl Orchestrator {
 
         let entry = self.library.get(id).unwrap_or_default();
         if attempt.remaining.is_empty() {
-            let said = messages::gave_up(entry.series, entry.attempt, 0);
+            let said = self.lang.gave_up(entry.series, entry.attempt, 0);
             self.library.note(id, &said, "no copies left to try");
             self.give_up(id, &attempt, &said);
             return;
         }
-        // enough failures in a row say the rest are not worth her bandwidth, but the rest stay
-        // listed: "probar más copias" is her call to make, and it costs one button
         let allowed = if entry.allowance == 0 {
             CHASE_LIMIT
         } else {
             entry.allowance
         };
         if entry.attempt >= allowed {
-            let said = messages::gave_up(entry.series, entry.attempt, attempt.remaining.len());
+            let said = self
+                .lang
+                .gave_up(entry.series, entry.attempt, attempt.remaining.len());
             self.library
                 .note(id, &said, "chase limit reached; the rest are kept for her");
             let kept = attempt.remaining.clone();
@@ -1505,7 +1263,6 @@ impl Orchestrator {
                 });
             }
             Err(failure) => {
-                // the reason the chase stopped is part of the story, not a stderr aside
                 self.library
                     .note(id, &failure, "no further copy could start");
                 let attempt = Attempt {
@@ -1519,8 +1276,6 @@ impl Orchestrator {
         }
     }
 
-    /// The chase pauses for this film until the server answers again. Said once per outage, not
-    /// once per tick, and the attempt is kept whole.
     fn stall(&self, id: i64, attempt: Attempt, said: &'static str, why: &str) {
         let first_word = self.server_trouble.lock().expect("not poisoned").is_none();
         if first_word {
@@ -1537,17 +1292,15 @@ impl Orchestrator {
             .insert(id, attempt);
     }
 
-    /// She pressed the button the give-up screen offers: carry on with the copies that were
-    /// kept beyond the chase limit, under a fresh allowance.
     pub fn try_more(&self, id: i64) -> Result<Grabbed, String> {
         let entry = self
             .library
             .get(id)
             .filter(|entry| entry.gave_up && !entry.remaining.is_empty())
-            .ok_or_else(|| "No quedan más copias que probar.".to_string())?;
+            .ok_or_else(|| self.lang.no_copies_left().to_string())?;
         self.library.note(
             id,
-            "Sigo con las copias que quedaban.",
+            self.lang.carrying_on_with_the_rest(),
             "she asked for more",
         );
         let remaining = entry.remaining.clone();
@@ -1589,17 +1342,14 @@ impl Orchestrator {
     }
 
     pub fn cancel(&self, id: i64) -> Result<(), String> {
-        // dropped first: stopping means stopping, not falling through to the next copy
         self.attempts.lock().expect("not poisoned").remove(&id);
         self.library
-            .note(id, messages::CANCELLED, "cancelled from the window");
+            .note(id, self.lang.cancelled(), "cancelled from the window");
         self.library.update(id, |entry| entry.remaining.clear());
         self.downloader
             .cancel(id)
-            .map_err(|failure| messages::explain(&failure).said)
+            .map_err(|failure| messages::explain(&failure, self.lang).said)
     }
-
-    // --- progress ----------------------------------------------------------------
 
     pub fn progress(&self) -> Progress {
         let measured = self.disk.space(&self.destination);
@@ -1610,7 +1360,7 @@ impl Orchestrator {
         let queue = match self.downloader.queue() {
             Ok(queue) => queue,
             Err(failure) => {
-                let explained = messages::explain(&failure);
+                let explained = messages::explain(&failure, self.lang);
                 self.log
                     .standing("progress", &format!("progress: {}", explained.why));
                 return Progress {
@@ -1628,7 +1378,7 @@ impl Orchestrator {
         let history = match self.downloader.history() {
             Ok(history) => history,
             Err(failure) => {
-                let explained = messages::explain(&failure);
+                let explained = messages::explain(&failure, self.lang);
                 self.log
                     .standing("progress", &format!("progress: {}", explained.why));
                 return Progress {
@@ -1645,8 +1395,9 @@ impl Orchestrator {
         };
         self.log.settled("progress");
 
+        const RATE_WORTH_REMEMBERING: u64 = 500_000;
         let rate = self.downloader.download_rate().unwrap_or(0);
-        if rate > 500_000 {
+        if rate > RATE_WORTH_REMEMBERING {
             let mut last = self.last_rate.lock().expect("not poisoned");
             *last = rate.max(*last);
         }
@@ -1671,12 +1422,11 @@ impl Orchestrator {
                         Status::Repairing => "repairing",
                         Status::Unpacking => "unpacking",
                         Status::Moving => "moving",
-                        // its own word: "finishing" over a stalled bar read as a fault of its own
                         Status::Paused => "paused",
                         Status::Finishing | Status::Other(_) => "finishing",
                     },
                     percent: item.percent(),
-                    beneath: remaining_in_words(item.remaining_mb, rate),
+                    beneath: remaining_in_words(item.remaining_mb, rate, self.lang),
                     speed: speed_in_words(rate),
                     attempt: remembered.attempt,
                     attempts_total: remembered.attempts_total,
@@ -1700,7 +1450,8 @@ impl Orchestrator {
                 let remembered = self.library.get(item.id).unwrap_or_default();
                 Finished {
                     detail: if remembered.gave_up && remembered.superseded_by.is_none() {
-                        messages::gave_up(remembered.series, remembered.attempt, remembered.untried)
+                        self.lang
+                            .gave_up(remembered.series, remembered.attempt, remembered.untried)
                     } else {
                         String::new()
                     },
@@ -1715,12 +1466,6 @@ impl Orchestrator {
                     languages: remembered.info,
                     series: remembered.series,
                     next_id: remembered.superseded_by,
-                    // failed, but the chase has not answered yet: the screen keeps waiting rather
-                    // than flashing a failure that is about to be untrue
-                    // a dead copy is "failed" only once the app has decided to give up, and
-                    // that decision lives in the library. Deriving this from the in-memory
-                    // attempts map flashed "no he podido conseguirla" during the seconds the
-                    // chase spent fetching the next copy.
                     retrying: known_entry
                         && !item.succeeded
                         && !abandoned_deliberately(&item.status)
@@ -1736,9 +1481,6 @@ impl Orchestrator {
             })
             .collect();
 
-        // a download nzbget has lost still has a story and, once the chase acts, a successor: the
-        // window follows the chain through here, so a vanished id must not break the chain and
-        // freeze the screen on "empezando"
         for (id, entry) in self.library.all() {
             if entry.settled || known.contains(&id) {
                 continue;
@@ -1750,7 +1492,8 @@ impl Orchestrator {
             }
             finished.push(Finished {
                 detail: if entry.gave_up && entry.superseded_by.is_none() {
-                    messages::gave_up(entry.series, entry.attempt, entry.untried)
+                    self.lang
+                        .gave_up(entry.series, entry.attempt, entry.untried)
                 } else {
                     String::new()
                 },
@@ -1783,12 +1526,7 @@ impl Orchestrator {
         }
     }
 
-    /// Her films, as they are on the disk right now. Works even when the downloader does not.
     fn shelf(&self) -> Vec<Shelved> {
-        // One film, one card. Two records of the same film can both be on the disk — a copy she
-        // deleted whose record was handed the next copy's folder, or the same film downloaded
-        // twice — and "La virgen roja" stood on her shelf twice over. `all` is newest first, so
-        // what survives is the copy she got last.
         let mut shown = std::collections::HashSet::new();
         self.library
             .all()
@@ -1807,8 +1545,6 @@ impl Orchestrator {
             .collect()
     }
 
-    /// What the tray icon says on hover: whether anything is coming down, how far along it is
-    /// and how fast, without opening the window.
     pub fn tray_report(&self) -> TrayReport {
         let Ok(queue) = self.downloader.queue() else {
             return TrayReport {
@@ -1818,8 +1554,8 @@ impl Orchestrator {
         };
         if queue.is_empty() {
             return TrayReport {
-                tooltip: "Mamá Cine · No se está descargando nada".to_string(),
-                summary: "No se está descargando nada".to_string(),
+                tooltip: format!("Mamá Cine · {}", self.lang.nothing_downloading()),
+                summary: self.lang.nothing_downloading().to_string(),
             };
         }
         let rate = self.downloader.download_rate().unwrap_or(0);
@@ -1839,11 +1575,11 @@ impl Orchestrator {
         };
         let summary = match lines.len() {
             1 => lines[0].clone(),
-            several if speed.is_empty() => format!("{several} descargas en marcha"),
-            several => format!("{several} descargas · {speed}"),
+            several if speed.is_empty() => self.lang.downloads_running(several),
+            several => self.lang.downloads_at(several, &speed),
         };
         TrayReport {
-            tooltip: tray_tooltip(&header, &lines),
+            tooltip: tray_tooltip(&header, &lines, self.lang),
             summary,
         }
     }
@@ -1856,50 +1592,46 @@ impl Orchestrator {
             .filter(|title| !title.is_empty())
             .unwrap_or_else(|| item.name.clone());
         let title = shortened(&title, TRAY_TITLE_LIMIT);
-        match item.status {
+        let status = match item.status {
             Status::Downloading => {
-                let left = remaining_in_words(item.remaining_mb, rate);
+                let left = remaining_in_words(item.remaining_mb, rate, self.lang);
                 let percent = format!("{:.0} %", item.percent());
-                if left.is_empty() {
+                return if left.is_empty() {
                     format!("{title} · {percent}")
                 } else {
                     format!("{title} · {percent} · {left}")
-                }
+                };
             }
-            Status::Paused => format!("{title} · En pausa ({:.0} %)", item.percent()),
-            Status::Queued => format!("{title} · Empezando la descarga"),
-            Status::Verifying => format!("{title} · Comprobando que está completa"),
-            Status::Repairing => format!("{title} · Arreglando lo que falta"),
-            Status::Unpacking => format!("{title} · Casi lista"),
-            Status::Moving => format!("{title} · Guardando"),
-            Status::Finishing | Status::Other(_) => format!("{title} · Últimos detalles"),
-        }
+            Status::Paused => "paused",
+            Status::Queued => "queued",
+            Status::Verifying => "verifying",
+            Status::Repairing => "repairing",
+            Status::Unpacking => "unpacking",
+            Status::Moving => "moving",
+            Status::Finishing | Status::Other(_) => "finishing",
+        };
+        format!(
+            "{title} · {}",
+            self.lang.tray_status(status, item.percent())
+        )
     }
 
-    // --- her films ---------------------------------------------------------------
-
-    /// To the recycle bin, and the shelf agrees with the disk on the next poll.
     pub fn remove(&self, id: i64) -> Result<(), String> {
         let entry = self
             .library
             .get(id)
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())?;
         let folder = entry
             .folder
             .filter(|folder| folder.exists())
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())?;
         self.remover.remove(&folder)?;
-        // said outright, so nothing later reads the empty folder as a film to go looking for
         self.library.update(id, |entry| entry.retired = true);
-        self.library.note(
-            id,
-            "La has enviado a la papelera. Desde ahí todavía la puedes recuperar.",
-            "sent to the recycle bin",
-        );
+        self.library
+            .note(id, self.lang.sent_to_the_bin(), "sent to the recycle bin");
         Ok(())
     }
 
-    /// The library first: it remembers where a film is long after nzbget's history has rolled over.
     pub fn folder_of(&self, id: i64) -> Result<PathBuf, String> {
         if let Some(folder) = self
             .library
@@ -1912,16 +1644,16 @@ impl Orchestrator {
         let history = self
             .downloader
             .history()
-            .map_err(|failure| messages::explain(&failure).said)?;
+            .map_err(|failure| messages::explain(&failure, self.lang).said)?;
         let entry = history
             .into_iter()
             .find(|item| item.id == id)
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())?;
         entry
             .directory
             .map(PathBuf::from)
             .filter(|folder| folder.exists())
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())
     }
 
     pub fn film_file(&self, id: i64) -> Result<PathBuf, String> {
@@ -1937,9 +1669,6 @@ impl Orchestrator {
         }
     }
 
-    /// The episodes of a season, named as she counts them, so a folder of release-named files
-    /// never has to be opened by hand. Each one says whether it has subtitles she can read: "en 2
-    /// de 12 episodios" named no episode, and this screen is where naming one is worth something.
     pub fn episodes(&self, id: i64) -> Result<Vec<EpisodeRow>, String> {
         let folder = self.folder_of(id)?;
         let beside = crate::finishing::subtitles_in(&folder);
@@ -1969,10 +1698,6 @@ impl Orchestrator {
             .collect())
     }
 
-    /// The episodes of a season she already owns, as the show database names them. Everything is
-    /// optional: a season from before the app kept the show's ids, a provider with nothing to say
-    /// and a provider that cannot be reached all answer the same way, and the screen stands
-    /// without names exactly as it stands without a synopsis.
     fn named_episodes(&self, id: i64) -> Vec<Episode> {
         let Some((show, first, last)) = self.identified(id) else {
             return Vec::new();
@@ -1984,8 +1709,10 @@ impl Orchestrator {
         let episodes = match self.suggestions.episodes(&show, first, last) {
             Ok(episodes) => episodes,
             Err(failure) => {
-                self.log
-                    .line(&format!("episodes: {}", messages::explain(&failure).why));
+                self.log.line(&format!(
+                    "episodes: {}",
+                    messages::explain(&failure, self.lang).why
+                ));
                 Vec::new()
             }
         };
@@ -1996,14 +1723,6 @@ impl Orchestrator {
         episodes
     }
 
-    /// Which show a season she owns is, and which seasons its folder holds.
-    ///
-    /// A season downloaded before the app kept the show's ids, and one whose search never
-    /// identified the show, arrive here knowing neither, and a folder full of numbered episodes is
-    /// all her screen can then say. Both questions have an answer that does not depend on a search
-    /// that is long gone: the files on the disk state which seasons they are, and the show
-    /// database answers to the name on the card. Asked once and written back, because a folder
-    /// does not change its mind about which show it is.
     fn identified(&self, id: i64) -> Option<(ShowIds, u32, u32)> {
         let entry = self.library.get(id)?;
         let (first, last) = match entry.seasons {
@@ -2027,8 +1746,6 @@ impl Orchestrator {
         Some((show, first, last))
     }
 
-    /// Which seasons the folder holds, from the names of the files in it. What is on the disk is
-    /// the one answer about her own copy that cannot be out of date.
     fn seasons_on_disk(&self, id: i64) -> Option<(u32, u32)> {
         let numbered: Vec<u32> = self
             .episode_files(id)
@@ -2039,11 +1756,6 @@ impl Orchestrator {
         Some((*numbered.iter().min()?, *numbered.iter().max()?))
     }
 
-    /// The show behind the name on her card, asked of the database that names the episodes.
-    ///
-    /// Not the suggestion list she picks from as she types: that is ordered for someone who is
-    /// there to choose, and nobody is here. The providers answer this one directly, and a name
-    /// they cannot place leaves the season numbered rather than named after another programme.
     fn identify_show(&self, name: &str) -> Option<ShowIds> {
         if name.trim().is_empty() {
             return None;
@@ -2053,7 +1765,7 @@ impl Orchestrator {
             Err(failure) => {
                 self.log.line(&format!(
                     "identifying {name}: {}",
-                    messages::explain(&failure).why
+                    messages::explain(&failure, self.lang).why
                 ));
                 return None;
             }
@@ -2072,12 +1784,9 @@ impl Orchestrator {
             .into_iter()
             .nth(position)
             .map(|(_, _, path)| path)
-            .ok_or_else(|| "Ese episodio ya no está en la carpeta.".to_string())
+            .ok_or_else(|| self.lang.episode_gone().to_string())
     }
 
-    /// Each video in the folder with the season and episode its own name states, which is what
-    /// the show database's list can be matched against. A file whose name says neither keeps its
-    /// place in the folder as its only name.
     fn episode_files(&self, id: i64) -> Result<Vec<EpisodeFile>, String> {
         use mamacine_core::series::episode_of;
         let folder = self.folder_of(id)?;
@@ -2098,19 +1807,16 @@ impl Orchestrator {
                     .and_then(episode_of);
                 let label = match numbered {
                     Some((season, episode)) if several => {
-                        format!("Temporada {season} · Episodio {episode}")
+                        self.lang.season_episode_label(season, episode)
                     }
-                    Some((_, episode)) => format!("Episodio {episode}"),
-                    None => format!("Vídeo {}", position + 1),
+                    Some((_, episode)) => self.lang.episode_label(episode),
+                    None => self.lang.video_label(position + 1),
                 };
                 (label, numbered, path)
             })
             .collect())
     }
 
-    /// The episodes a season holds, asked of the show database once and remembered. A search that
-    /// identified no show, and a provider with nothing to say, answer with an empty list: the
-    /// screen stands without it, exactly as it does without a synopsis.
     pub fn season_episodes(&self, index: usize) -> Result<Vec<Episode>, String> {
         let Some(season) = self
             .seasons
@@ -2132,10 +1838,11 @@ impl Orchestrator {
         }
         let episodes = match self.suggestions.episodes(&show, first, last) {
             Ok(episodes) => episodes,
-            // the list is garnish: what she came for is the season, and it is still there
             Err(failure) => {
-                self.log
-                    .line(&format!("episodes: {}", messages::explain(&failure).why));
+                self.log.line(&format!(
+                    "episodes: {}",
+                    messages::explain(&failure, self.lang).why
+                ));
                 Vec::new()
             }
         };
@@ -2146,8 +1853,6 @@ impl Orchestrator {
         Ok(episodes)
     }
 
-    /// Where IMDb keeps this season: its own page lists every episode, which is more than the app
-    /// can say about one.
     pub fn imdb_season_of(&self, index: usize) -> Result<(String, u32), String> {
         let first = self
             .seasons
@@ -2155,14 +1860,14 @@ impl Orchestrator {
             .expect("not poisoned")
             .get(index)
             .map(|season| season.first)
-            .ok_or_else(|| "Esa temporada ya no está en los resultados.".to_string())?;
+            .ok_or_else(|| self.lang.season_gone_from_results().to_string())?;
         let imdb = self
             .searched_show
             .lock()
             .expect("not poisoned")
             .imdb
             .clone()
-            .ok_or_else(|| "Esta serie no tiene ficha.".to_string())?;
+            .ok_or_else(|| self.lang.series_has_no_page().to_string())?;
         Ok((imdb, first))
     }
 
@@ -2172,12 +1877,9 @@ impl Orchestrator {
             .expect("not poisoned")
             .get(index)
             .and_then(|film| film.imdb.clone())
-            .ok_or_else(|| "Esta película no tiene ficha.".to_string())
+            .ok_or_else(|| self.lang.film_has_no_page().to_string())
     }
 
-    /// What the film is about, asked of the film database once and remembered. A film without an
-    /// IMDb id, or a provider without words, answers nothing rather than an error: the ficha is
-    /// garnish and the screen stands without it.
     pub fn synopsis(&self, index: usize) -> Result<String, String> {
         let Ok(id) = self.imdb_of(index) else {
             return Ok(String::new());
@@ -2185,8 +1887,6 @@ impl Orchestrator {
         self.synopsis_of(&id)
     }
 
-    /// What something she already owns is about, for its own page: asked by the id kept with it,
-    /// rather than by a place in a list of results that may be several searches old.
     pub fn library_synopsis(&self, id: i64) -> Result<String, String> {
         match self.library.get(id).and_then(|entry| entry.imdb) {
             Some(imdb) => self.synopsis_of(&imdb),
@@ -2195,7 +1895,6 @@ impl Orchestrator {
     }
 
     fn synopsis_of(&self, id: &str) -> Result<String, String> {
-        // the same normalised id the IMDb page is opened with
         let imdb = format!(
             "tt{:0>7}",
             id.trim().trim_start_matches("tt").trim_start_matches('0')
@@ -2207,9 +1906,7 @@ impl Orchestrator {
             .suggestions
             .synopsis(&imdb)
             .map_err(|failure| {
-                // the window treats a missing ficha as garnish and says nothing, so a key the
-                // database rejects would otherwise be invisible from both sides
-                let said = messages::explain(&failure);
+                let said = messages::explain(&failure, self.lang);
                 self.log.line(&format!("synopsis {imdb}: {}", said.why));
                 said.said
             })?
@@ -2221,15 +1918,10 @@ impl Orchestrator {
         Ok(words)
     }
 
-    // --- images ------------------------------------------------------------------
-
-    /// The window is not allowed to reach the internet; images come back through here as data,
-    /// fetched once and kept, because the grid asks on every render.
     pub fn image(&self, url: &str) -> Result<String, String> {
         if let Some(found) = self.covers.lock().expect("not poisoned").get(url) {
             return Ok(found.clone());
         }
-        // a suggestion poster comes from the film database; cover art from the indexer it names
         let poster_host = host_of(url)
             .map(|host| host.ends_with("media-amazon.com") || host == "image.tmdb.org")
             .unwrap_or(false);
@@ -2239,12 +1931,13 @@ impl Orchestrator {
             self.indexer_for(url)
                 .ok_or_else(|| {
                     mamacine_core::error::Error::Setup(
-                        "Esa imagen viene de un buscador que ya no está en los ajustes.".into(),
+                        self.lang.image_from_forgotten_indexer().into(),
                     )
                 })
                 .and_then(|indexer| indexer.cover(url))
         };
-        let (kind, bytes) = fetched.map_err(|failure| messages::explain(&failure).said)?;
+        let (kind, bytes) =
+            fetched.map_err(|failure| messages::explain(&failure, self.lang).said)?;
         let encoded = format!(
             "data:{kind};base64,{}",
             mamacine_core::nzbget::base64(&bytes)
@@ -2257,59 +1950,59 @@ impl Orchestrator {
     }
 }
 
-// --- words and arithmetic --------------------------------------------------------
-
-/// The words she reads, with the resolution they stand for beside them: the number is real
-/// information, and hiding it behind a friendly word is deciding what she may know.
-fn definition_of(release: &SearchResult) -> &'static str {
+fn definition_of(release: &SearchResult, lang: Lang) -> &'static str {
     let title = release.title.to_lowercase();
-    if title.contains("2160p") || title.contains("4k") {
+    lang.definition(if title.contains("2160p") || title.contains("4k") {
         "4K"
     } else if title.contains("1080p") {
-        "Alta definición (1080p)"
+        "1080p"
     } else if title.contains("720p") {
-        "Buena calidad (720p)"
+        "720p"
     } else {
-        "Calidad normal"
-    }
+        ""
+    })
 }
 
 fn size_of(release: &SearchResult) -> String {
     gigabytes(release.size_bytes)
 }
 
-/// The chip a copy belongs under. Dual counts as Spanish for the same bet `matches` makes.
-fn voice_of(release: &SearchResult) -> &'static str {
-    use mamacine_core::release::Tag;
+fn voice_of(release: &SearchResult, language: &'static str) -> &'static str {
+    use mamacine_core::release::{names_another_language, Tag};
     let has = |tag: Tag| release.tags.contains(&tag);
-    if has(Tag::Spanish) || (has(Tag::Dual) && !has(Tag::Latino) && !has(Tag::OtherLanguage)) {
-        "es"
-    } else if has(Tag::Latino) {
-        "latino"
-    } else if has(Tag::OtherLanguage) {
+    if has(Tag::Dub(language))
+        || (has(Tag::Dual)
+            && !has(Tag::Variant(language))
+            && !names_another_language(&release.tags, language))
+    {
+        language
+    } else if has(Tag::Variant(language)) {
+        if language == "es" {
+            "latino"
+        } else {
+            "otro"
+        }
+    } else if names_another_language(&release.tags, language) {
         "otro"
     } else {
         "original"
     }
 }
 
-/// Which languages a copy is in, said outright wherever its name says so.
-///
-/// "Versión original" over an Italian copy is the app telling her something it does not know,
-/// and she found that out by watching twenty minutes of it. "En otro idioma" was no better: it
-/// says the copy is wrong without saying what it is, so the only way to find out was still to
-/// download it. A name that carries two languages is read as two.
-fn language_of(release: &SearchResult) -> String {
+fn language_of(release: &SearchResult, lang: Lang) -> String {
     use mamacine_core::release::Tag;
     let has = |tag: Tag| release.tags.contains(&tag);
-    let spoken = mamacine_core::release::languages_named(&release.title);
+    let spoken: Vec<&str> = mamacine_core::release::languages_claimed(&release.title)
+        .into_iter()
+        .filter_map(|code| crate::text::language_noun(lang, code))
+        .collect();
     let said = match spoken.as_slice() {
         [] => String::new(),
         [only] => capitalised(only),
         [first, rest @ ..] => {
             let mut said = capitalised(first);
             for other in rest {
-                said.push_str(" y ");
+                said.push_str(lang.and_the_next());
                 said.push_str(other);
             }
             said
@@ -2317,19 +2010,20 @@ fn language_of(release: &SearchResult) -> String {
     };
     if has(Tag::Subbed) {
         return match said.is_empty() {
-            true => "Original con subtítulos".into(),
-            false => format!("{said}, con subtítulos"),
+            true => lang.original_with_subtitles().into(),
+            false => lang.with_subtitles(&said),
         };
     }
     if !said.is_empty() {
         return said;
     }
-    // nothing in the name says anything, and an unmarked copy is the original often enough that
-    // the honest guess is worth more than silence
-    if has(Tag::Dual) {
-        return "Dos idiomas".into();
+    if has(Tag::OtherLanguage) {
+        return lang.language_unknown().into();
     }
-    "Versión original".into()
+    if has(Tag::Dual) {
+        return lang.two_languages().into();
+    }
+    lang.original_version().into()
 }
 
 fn capitalised(word: &str) -> String {
@@ -2340,11 +2034,6 @@ fn capitalised(word: &str) -> String {
     }
 }
 
-/// How much this entry looks like what she typed. The card's display title comes from the film
-/// database and may be in another language ("Champions" for a "campeones" search), so the release
-/// names, which carry the title the thing was actually filed under, get a vote too.
-/// How much a card looks like the name the question actually asked for. Only a loose question is
-/// judged this way: an indexer given words can free-associate, and one given an id cannot.
 fn looks_like(asked: &str, name: &str, releases: &[SearchResult]) -> f64 {
     releases
         .iter()
@@ -2353,13 +2042,11 @@ fn looks_like(asked: &str, name: &str, releases: &[SearchResult]) -> f64 {
         .fold(mamacine_core::search::relevance(asked, name), f64::max)
 }
 
-/// The same words, whatever she capitalized and whichever accents she reached for.
 fn same_text(one: &str, other: &str) -> bool {
     let plain = |text: &str| mamacine_core::search::fold(text.trim()).to_lowercase();
     plain(one) == plain(other)
 }
 
-/// The same rule that will later refuse the download, asked while she is still deciding.
 fn room_of(free: Option<u64>, size: u64) -> &'static str {
     use mamacine_core::space::{room_for, Room};
     let Some(free) = free else { return "fits" };
@@ -2380,36 +2067,34 @@ fn minutes_for(size_bytes: u64, rate: u64) -> Option<i64> {
     Some(((size_bytes as f64 / rate as f64) / 60.0).ceil() as i64)
 }
 
-/// The chosen copy first, then every other one, best first: the ones behind it are the plan for
-/// when this one turns out to be dead.
-fn candidates_from(releases: &[SearchResult], version: Option<usize>) -> Vec<SearchResult> {
+fn candidates_from(
+    releases: &[SearchResult],
+    version: Option<usize>,
+    language: &'static str,
+) -> Vec<SearchResult> {
     let chosen = version.unwrap_or(0);
     let mut ordered = Vec::with_capacity(releases.len());
-    let voice = releases.get(chosen).map(voice_of);
+    let voice = releases
+        .get(chosen)
+        .map(|release| voice_of(release, language));
     if let Some(first) = releases.get(chosen) {
         ordered.push(first.clone());
     }
-    // her choice of copy is also a choice of language: when it dies, the next copy in the same
-    // voice comes first, and a silent switch to another language comes last
     let rest = releases
         .iter()
         .enumerate()
         .filter(|(position, _)| *position != chosen);
     let (same_voice, other): (Vec<_>, Vec<_>) =
-        rest.partition(|(_, release)| Some(voice_of(release)) == voice);
+        rest.partition(|(_, release)| Some(voice_of(release, language)) == voice);
     ordered.extend(same_voice.into_iter().map(|(_, release)| release.clone()));
     ordered.extend(other.into_iter().map(|(_, release)| release.clone()));
     ordered
 }
 
-/// Whether this download ended because somebody meant it to, rather than because the copy was bad.
-/// nzbget's own words: `DELETED/MANUAL` is her pressing cancel, `DELETED/COPY` is its duplicate
-/// check, which the app turns off but which an older configuration on her machine may still have.
 fn abandoned_deliberately(status: &str) -> bool {
     status.contains("MANUAL") || status.contains("COPY")
 }
 
-/// The same moment, for whoever is fixing the app rather than watching a film.
 fn explain_failure(item: &mamacine_core::nzbget::HistoryItem) -> String {
     if item.failed_articles > 0 {
         format!(
@@ -2426,26 +2111,22 @@ fn gigabytes(bytes: u64) -> String {
     if value >= 100.0 {
         format!("{value:.0} GB")
     } else {
-        // the interface speaks es-ES, where the decimal separator is a comma
         format!("{value:.1} GB").replace('.', ",")
     }
 }
 
-/// Minutes she can plan around, not bytes a second.
-fn remaining_in_words(remaining_mb: i64, rate_bytes: u64) -> String {
+fn remaining_in_words(remaining_mb: i64, rate_bytes: u64, lang: Lang) -> String {
     if rate_bytes == 0 || remaining_mb <= 0 {
         return String::new();
     }
     let seconds = (remaining_mb as f64 * 1_048_576.0) / rate_bytes as f64;
     if seconds < 90.0 {
-        "Menos de un minuto".to_string()
+        lang.under_a_minute().to_string()
     } else {
-        format!("Unos {} minutos", (seconds / 60.0).round() as i64)
+        lang.about_minutes((seconds / 60.0).round() as i64)
     }
 }
 
-/// Bytes a second, in the units every download in the world shows. Only for a running download:
-/// a number that sits at zero next to a stalled bar reads as a fault of its own.
 fn speed_in_words(rate_bytes: u64) -> String {
     match rate_bytes {
         0 => String::new(),
@@ -2454,18 +2135,16 @@ fn speed_in_words(rate_bytes: u64) -> String {
     }
 }
 
-/// Windows truncates a tray tooltip past 127 characters, so it is built to fit: the header, then
-/// as many films as are left room for, then a count of the ones that were not.
 const TRAY_TOOLTIP_LIMIT: usize = 127;
 const TRAY_TITLE_LIMIT: usize = 34;
 
-fn tray_tooltip(header: &str, items: &[String]) -> String {
+fn tray_tooltip(header: &str, items: &[String], lang: Lang) -> String {
     let mut shown = items.len();
     loop {
         let mut lines = vec![header.to_string()];
         lines.extend(items.iter().take(shown).cloned());
         if shown < items.len() {
-            lines.push(format!("y {} más", items.len() - shown));
+            lines.push(lang.and_more(items.len() - shown));
         }
         let tooltip = lines.join("\n");
         if shown == 0 || tooltip.chars().count() <= TRAY_TOOLTIP_LIMIT {
@@ -2495,8 +2174,6 @@ mod tests {
     use mamacine_core::nzbget::HistoryItem;
     use std::sync::atomic::{AtomicI64, Ordering};
 
-    // --- the fakes ---------------------------------------------------------------
-
     struct FakeIndexer {
         results: Vec<SearchResult>,
         fails: bool,
@@ -2514,8 +2191,6 @@ mod tests {
                     message: "too many requests".into(),
                 });
             }
-            // television answers with packs, film with films; the fake keeps it simple and
-            // answers everything, letting the grouping sort it out
             let _ = category;
             Ok(self.results.clone())
         }
@@ -2527,7 +2202,6 @@ mod tests {
                 .lock()
                 .expect("not poisoned")
                 .push(url.to_string());
-            // realistic enough to probe: a hundred data articles and a sliver of par2
             let segments: String = (0..100)
                 .map(|n| format!(r#"<segment bytes="1000" number="{n}">id-{n}@x</segment>"#))
                 .collect();
@@ -2703,8 +2377,6 @@ mod tests {
         }
     }
 
-    /// A title provider that behaves as the real ones do: a name in any language matches the one
-    /// thing it names, and it answers under the name that thing is released with.
     struct NoSuggestions;
 
     impl NoSuggestions {
@@ -2727,7 +2399,6 @@ mod tests {
                     vec!["gomorra", "gomorrah"],
                     title("2049116", "Gomorrah", None, "2014", true),
                 ),
-                // the film of the same name, offered after the series: "gomorra" means the show
                 (
                     vec!["gomorra", "gomorrah"],
                     title("0929425", "Gomorrah", None, "2008", false),
@@ -2758,7 +2429,6 @@ mod tests {
                 .map(|(_, suggestion)| suggestion)
                 .collect())
         }
-        /// A real provider asks a show database which show this is; the fake knows.
         fn resolve(&self, suggestion: &Suggestion) -> Result<Picked> {
             let picked = mamacine_core::lookup::resolve(suggestion);
             if !picked.series {
@@ -2772,7 +2442,6 @@ mod tests {
                 ..picked
             })
         }
-        /// The real providers answer this outright, and so does the fake: one name, one show.
         fn show_named(&self, name: &str) -> Result<ShowIds> {
             let found = NoSuggestions::catalogue()
                 .into_iter()
@@ -2827,8 +2496,6 @@ mod tests {
         }
     }
 
-    // --- scaffolding -------------------------------------------------------------
-
     const GIGABYTE: u64 = 1_073_741_824;
 
     fn release(title: &str, size_gb: f64, grabs: u64) -> SearchResult {
@@ -2863,19 +2530,14 @@ mod tests {
 
     struct World {
         orchestrator: Orchestrator,
-        /// The same records the orchestrator writes, so a flow can be followed the whole way
-        /// rather than only up to the point where the download was handed over.
         library: Arc<Library>,
         finisher: crate::finishing::Finisher,
-        /// What the swap and the shelf's Borrar actually sent to the bin.
         binned: Arc<FakeRemover>,
         downloader: Arc<FakeDownloader>,
         notified: Arc<Mutex<Vec<(String, String)>>>,
         prober_answers: Arc<Mutex<Vec<f64>>>,
         prober_bodies: Arc<Mutex<Vec<Vec<u8>>>>,
         directory: PathBuf,
-        /// Every question the indexer was asked, so a test can check what was asked and not only
-        /// what came back.
         asked: Arc<Mutex<Vec<Query>>>,
     }
 
@@ -2919,7 +2581,7 @@ mod tests {
             }
         }
 
-        let library = Arc::new(Library::open(&directory, Arc::clone(&log)));
+        let library = Arc::new(Library::open(&directory, Arc::clone(&log), Lang::Es));
         let finisher_log = Arc::clone(&log);
         let binned = Arc::new(FakeRemover::default());
         let asked: Arc<Mutex<Vec<Query>>> = Arc::new(Mutex::new(Vec::new()));
@@ -2960,15 +2622,15 @@ mod tests {
                     .expect("not poisoned")
                     .push((title.to_string(), body.to_string()));
             }),
+            lang: Lang::Es,
         });
-        // the same downloader, the same records, the same bin: what the app wires together at
-        // startup, so a test can watch a download all the way onto her shelf
         let finisher = crate::finishing::Finisher {
             downloader: Box::new(SharedDownloader(Arc::clone(&downloader))),
-            subtitles: Box::new(NoSubtitles),
+            subtitles: std::sync::Arc::new(NoSubtitles),
             library: Arc::clone(&library),
             log: Arc::clone(&finisher_log),
             language: "es".into(),
+            lang: Lang::Es,
             remover: Arc::clone(&binned) as Arc<dyn Remover>,
             notify: Box::new(|_, _| {}),
         };
@@ -3001,11 +2663,6 @@ mod tests {
             .id
     }
 
-    /// nzbget finishing a download, and the app doing what it does next.
-    ///
-    /// The whole life of a copy in one call: the folder appears on the disk, the downloader
-    /// starts calling it succeeded, and the finisher settles it onto her shelf. Every bug worth
-    /// the name this month lived between those steps and not inside any of them.
     fn arrives(world: &World, id: i64, folder: &str) -> PathBuf {
         let landed = world.orchestrator.destination.join(folder);
         std::fs::create_dir_all(&landed).expect("a folder");
@@ -3036,10 +2693,6 @@ mod tests {
         landed
     }
 
-    // --- the whole life of a copy ------------------------------------------------
-
-    // The happy path, end to end: nothing here is asserted anywhere else, because every other
-    // test stops at the point where the download was handed over.
     #[test]
     fn a_film_searched_for_and_downloaded_ends_up_on_her_shelf() {
         let world = world_with(
@@ -3064,8 +2717,6 @@ mod tests {
         assert_eq!(world.orchestrator.have(0, false).have, Some(id));
     }
 
-    // The whole swap, which is the flow that deleted her film twice: she has a copy, she picks a
-    // different one, and only once the new one is really here does the old one go.
     #[test]
     fn swapping_a_copy_keeps_the_new_one_and_bins_only_the_old_one() {
         let world = world_with(
@@ -3109,8 +2760,6 @@ mod tests {
         assert!(world.library.get(first).expect("the old record").retired);
     }
 
-    // A retired record stays retired: nzbget still calls its download succeeded, so every sweep
-    // is another chance for it to climb back onto her shelf.
     #[test]
     fn a_copy_she_swapped_out_does_not_come_back_on_the_next_sweep() {
         let world = world_with(
@@ -3138,8 +2787,6 @@ mod tests {
         assert_eq!(world.binned.removed.lock().expect("not poisoned").len(), 1);
     }
 
-    // She threw a film away and downloaded another copy of it. The repair used to hand the
-    // deleted record the new copy's folder, and her shelf then held the film twice.
     #[test]
     fn a_film_she_deleted_and_downloaded_again_stands_on_her_shelf_once() {
         let world = world_with(
@@ -3163,8 +2810,6 @@ mod tests {
         assert_eq!(shelf.len(), 1, "one film, one card");
         assert_eq!(shelf[0].id, again.id);
     }
-
-    // --- the behaviour -----------------------------------------------------------
 
     #[test]
     fn a_synopsis_is_asked_for_once_and_remembered() {
@@ -3239,7 +2884,6 @@ mod tests {
             .expect("not poisoned")
             .push(failed(first, "Das Boot"));
 
-        // before the chase has answered, the failure must read as "still working on it"
         let progress = world.orchestrator.progress();
         let landed = progress
             .finished
@@ -3258,7 +2902,6 @@ mod tests {
             .find(|film| film.id == first)
             .expect("in history");
         assert_eq!(landed.next_id, Some(first + 1), "the next copy took over");
-        // the screen follows next_id, and the successor is owed the whole story
         let story = world
             .orchestrator
             .library
@@ -3275,10 +2918,6 @@ mod tests {
         );
     }
 
-    // A server problem is transient: it must never consume the film, never blame the copies,
-    // and never end in an instruction with no next step. The chase waits, says so once, and
-    // resumes on its own the moment the server answers — seen live when a false "server broken"
-    // verdict abandoned a season over an RPC arity error.
     #[test]
     fn a_server_problem_pauses_the_chase_and_it_resumes_by_itself() {
         let mut world = world_with(
@@ -3300,7 +2939,7 @@ mod tests {
             .push(failed(first, "Das Boot"));
 
         world.orchestrator.chase();
-        world.orchestrator.chase(); // a second tick must not repeat the story line
+        world.orchestrator.chase();
 
         assert_eq!(
             world
@@ -3317,13 +2956,13 @@ mod tests {
         let refusals = entry
             .story
             .iter()
-            .filter(|note| note.said == messages::SERVER_REFUSED)
+            .filter(|note| note.said == Lang::Es.server_refused())
             .count();
         assert_eq!(refusals, 1, "said once per outage, not once per tick");
         let progress = world.orchestrator.progress();
         assert_eq!(
             progress.problem.as_deref(),
-            Some(messages::SERVER_REFUSED),
+            Some(Lang::Es.server_refused()),
             "the banner names the real problem and what happens next"
         );
         assert_eq!(
@@ -3332,7 +2971,6 @@ mod tests {
             "she is told even if she walked away"
         );
 
-        // the account is fixed: the chase notices on its own and carries on
         *world.downloader.check.lock().expect("not poisoned") = ServerCheck::Working;
         world.orchestrator.chase();
         assert_eq!(
@@ -3460,7 +3098,6 @@ mod tests {
             ],
             20 * GIGABYTE,
         );
-        // the huge one wins the version pick on purpose here
         let id = world
             .orchestrator
             .search("das boot", None, None)
@@ -3474,7 +3111,6 @@ mod tests {
             .story
             .iter()
             .any(|note| note.said.contains("no cabe en el disco"));
-        // whichever release ranked first, a skip must never be silent
         if world
             .downloader
             .appended
@@ -3519,10 +3155,6 @@ mod tests {
         );
     }
 
-    // A copy that arrived left its attempt in the map for the rest of the run, and `in_flight`
-    // read that as a download still going. Asked for a different copy of a film she already had,
-    // the app handed back the id of the finished one and started nothing: the bar went to zero
-    // and straight to "lista para ver" without a byte being fetched.
     #[test]
     fn a_copy_that_already_arrived_is_never_mistaken_for_one_still_coming() {
         let world = world_with(
@@ -3553,7 +3185,6 @@ mod tests {
             });
         world.orchestrator.progress();
 
-        // she asks for a different copy of the film she now has
         let swapped = world
             .orchestrator
             .grab(0, Some(1), false, Some(first))
@@ -3575,7 +3206,6 @@ mod tests {
         );
     }
 
-    // The detail screen offered "Descargar" for a season that was downloading at that moment.
     #[test]
     fn the_detail_screen_is_told_about_a_download_already_on_its_way() {
         let world = world_with(
@@ -3681,7 +3311,7 @@ mod tests {
         let items: Vec<String> = (1..=6)
             .map(|number| format!("Una película con un título larguísimo {number} · 50 %"))
             .collect();
-        let tooltip = tray_tooltip("Mamá Cine · 5 MB/s", &items);
+        let tooltip = tray_tooltip("Mamá Cine · 5 MB/s", &items, Lang::Es);
         assert!(tooltip.chars().count() <= TRAY_TOOLTIP_LIMIT, "{tooltip}");
         assert!(tooltip.contains("Una película"), "{tooltip}");
         assert!(tooltip.contains("más"), "{tooltip}");
@@ -3739,9 +3369,6 @@ mod tests {
         assert!(found.notice.is_none());
     }
 
-    // She picked "serie" in the suggestions, and was shown a wall of films first: the films
-    // category was searched anyway, and its parodies and episode reviews came back above the
-    // seasons she chose.
     #[test]
     fn a_name_she_already_called_a_series_is_never_searched_as_a_film() {
         let world = world_with(
@@ -3762,9 +3389,6 @@ mod tests {
         assert_eq!(found.seasons.len(), 1);
     }
 
-    // Picking the Gomorrah series and being told it does not exist: the season search asked for
-    // the name followed by "complete", which matches the release name literally, and season packs
-    // are not named that. Asked by id, the same indexer answers with every season.
     #[test]
     fn a_show_she_picked_is_asked_for_by_id_and_named_after_her_pick() {
         let world = world_with(
@@ -3797,8 +3421,6 @@ mod tests {
         assert_eq!(found.seasons[0].show, "Gomorrah");
     }
 
-    // "Son varios episodios" is what the screen could say, and it is less than the app knows:
-    // the show database can name them, and how many there are is what a season card is missing.
     #[test]
     fn the_episodes_of_a_picked_season_are_named_and_counted() {
         let world = world_with(
@@ -3861,8 +3483,6 @@ mod tests {
         );
     }
 
-    // She typed the name she knows and got an empty screen: "juego de tronos" answered with
-    // nothing at every indexer, while "game of thrones" answered with the whole show.
     #[test]
     fn a_name_in_her_language_finds_what_releases_are_named_in_another() {
         let world = world_with(
@@ -3890,9 +3510,6 @@ mod tests {
         );
     }
 
-    // She typed the name she knows and the releases are named in another language entirely.
-    // Nothing here reads Japanese, and nothing has to: the show was identified, and the indexer
-    // was asked for the thing rather than for her words.
     #[test]
     fn a_film_whose_releases_are_named_in_another_language_is_still_hers() {
         let world = world_with(
@@ -3916,9 +3533,6 @@ mod tests {
         );
     }
 
-    // Her words go to an indexer only when nothing recognised them. Sending them anyway asks a
-    // second question that answers with the same releases or with noise, and either way it is a
-    // search hit somebody else is paying for.
     #[test]
     fn an_identified_title_is_asked_for_instead_of_her_words_not_beside_them() {
         let world = world_with(
@@ -3944,9 +3558,6 @@ mod tests {
         );
     }
 
-    // Nothing recognised what she typed, and an empty screen would be the wrong answer while an
-    // indexer can still be asked. Her words are the question of last resort, and what comes back
-    // is judged against them, because a keyword search is free to have misunderstood.
     #[test]
     fn words_nothing_recognises_are_still_asked_and_still_judged() {
         let world = world_with(
@@ -3976,10 +3587,6 @@ mod tests {
         );
     }
 
-    // "Gomorra" is a film and a series. Both are hers to choose from, and both were asked for by
-    // id, so neither can be the indexer having misunderstood. Which of the two the name means is
-    // still a question, and the provider was asked it: its own order is the answer, and the screen
-    // does not toss a coin over it a second time.
     #[test]
     fn the_kind_the_provider_offered_first_is_what_the_name_means() {
         let world = world_with(
@@ -4007,8 +3614,6 @@ mod tests {
         );
     }
 
-    // The window asks for suggestions on every keystroke, then she presses Buscar. Asking the
-    // same provider the same question again is a call somebody else is paying for.
     #[test]
     fn submitting_right_after_typing_reuses_the_suggestions_already_fetched() {
         struct CountingSuggest {
@@ -4052,8 +3657,6 @@ mod tests {
         );
     }
 
-    // She tapped a title: it arrived already named the way the indexer knows it, and translating
-    // it again would ask a provider to second-guess a choice she made.
     #[test]
     fn a_title_she_tapped_is_never_put_through_a_translation() {
         struct NeverAsked;
@@ -4080,8 +3683,6 @@ mod tests {
             .expect("results");
     }
 
-    // Nothing recognised her words, so an indexer was asked for them and was free to have
-    // misunderstood: what she named must never sit below what merely mentions it.
     #[test]
     fn what_she_named_outranks_what_merely_mentions_it() {
         let world = world_with(
@@ -4108,10 +3709,6 @@ mod tests {
         }
     }
 
-    // The chase spends seconds fetching the next copy; a poll landing in that window used to
-    // see "failed, no successor" and flash the death sentence before retracting it. The screen
-    // may only say "failed" once the library records the decision — and an undecided failure
-    // nobody is handling must be adopted by the chase, so "working on it" is provably temporary.
     #[test]
     fn an_undecided_failure_never_reads_as_failed_and_is_always_picked_up() {
         let world = world_with(
@@ -4128,7 +3725,6 @@ mod tests {
             .lock()
             .expect("not poisoned")
             .push(failed(first, "Das Boot"));
-        // the mid-decision window: the attempt is out of the map, nothing written yet
         let attempt = world
             .orchestrator
             .attempts
@@ -4147,7 +3743,7 @@ mod tests {
             landed.retrying,
             "mid-decision must read as working, never as failed"
         );
-        drop(attempt); // the handler died here: the failure is now an orphan
+        drop(attempt);
 
         world.orchestrator.chase();
         assert_eq!(
@@ -4164,9 +3760,6 @@ mod tests {
         assert_eq!(entry.superseded_by, Some(first + 1));
     }
 
-    // nzbget can only prove a rotten copy by downloading gigabytes until the failure count is
-    // beyond repair — nine gigabytes and twenty minutes per copy, in the field. A sampled STAT
-    // conversation knows in seconds, and the skip is a line of the story like any other skip.
     #[test]
     fn a_copy_the_server_no_longer_has_is_skipped_without_downloading_it() {
         let world = world_with(
@@ -4176,7 +3769,6 @@ mod tests {
             ],
             200 * GIGABYTE,
         );
-        // the first copy is 8% gone against 6% par2; the second is intact
         world
             .prober_answers
             .lock()
@@ -4214,10 +3806,6 @@ mod tests {
         );
     }
 
-    // 48 GB of dead seasons sat in nzbget's hidden work folder: a failed item keeps its
-    // partial download until its history entry is deleted, and nothing ever deleted it. The
-    // chase now buries what it discards, and sweeps corpses older builds left behind; the
-    // library carries everything the screen needs, so nothing she sees changes.
     #[test]
     fn a_discarded_copy_is_buried_so_its_gigabytes_do_not_haunt_the_disk() {
         let world = world_with(
@@ -4245,7 +3833,6 @@ mod tests {
             &[first],
             "the dead copy's files are deleted the moment it is replaced"
         );
-        // the chain still reads whole from the library alone
         let progress = world.orchestrator.progress();
         let ghost = progress
             .finished
@@ -4254,7 +3841,6 @@ mod tests {
             .expect("still tellable");
         assert_eq!(ghost.next_id, Some(first + 1));
 
-        // a corpse from an older build: failed in history, long since decided, tracked by nobody
         world
             .downloader
             .history
@@ -4281,10 +3867,6 @@ mod tests {
         );
     }
 
-    // The Joy copy: par2 present on the server yet covering none of the damage — no remote
-    // probe can see that, only nzbget's own attempt proves it. A copy proven dead is burned,
-    // and a later grab of the same thing goes straight past it instead of spending four more
-    // gigabytes on a known outcome.
     #[test]
     fn a_copy_the_downloader_refused_is_never_spent_again() {
         let world = world_with(
@@ -4316,7 +3898,6 @@ mod tests {
             "both copies were tried once"
         );
 
-        // she searches the same film again and presses Descargar again
         world
             .orchestrator
             .search("das boot", None, None)
@@ -4340,10 +3921,6 @@ mod tests {
         );
     }
 
-    // The Joy season: 1.7% damage, ten "par2" volumes that decode to something that is not
-    // par2 at all — disguised data, a scanner-dodging trick. nzbget finds nothing to repair
-    // with and any damage is fatal; the probe now unmasks the fakes for the price of one
-    // article, before a byte of the release is spent.
     #[test]
     fn a_copy_with_fake_repair_files_is_skipped_without_downloading_it() {
         let world = world_with(
@@ -4353,8 +3930,6 @@ mod tests {
             ],
             200 * GIGABYTE,
         );
-        // both copies: slight damage, par articles present — but the first copy's "par2" is
-        // not par2, and the second's is real
         world
             .prober_answers
             .lock()
@@ -4388,8 +3963,6 @@ mod tests {
         assert_eq!(entry.attempt, 1, "and it cost none of her allowance");
     }
 
-    // The give-up screen used to be an instruction with no door. "Probar más copias" is the
-    // door: the copies beyond the chase limit were kept, and the button spends them.
     #[test]
     fn trying_more_copies_continues_with_the_kept_ones_under_a_fresh_allowance() {
         let releases: Vec<SearchResult> = (0..7)
@@ -4468,13 +4041,10 @@ mod tests {
             "her decision is a line of the story"
         );
 
-        // pressing it with nothing left is answered, not obeyed
         let empty = world.orchestrator.try_more(999);
         assert!(empty.is_err());
     }
 
-    // Choosing a Spanish copy is choosing Spanish: when it dies, the chase falls to the next
-    // Spanish copy, and only after those are gone to another language.
     #[test]
     fn the_fall_through_keeps_her_language_before_it_keeps_the_ranking() {
         let releases = [
@@ -4483,7 +4053,7 @@ mod tests {
             release("Film.2016.720p.WEB-VO-B", 1.8, 400),
             release("Film.2016.CASTELLANO.720p.WEB-B", 1.8, 300),
         ];
-        let plan = candidates_from(&releases, Some(1));
+        let plan = candidates_from(&releases, Some(1), "es");
         let titles: Vec<&str> = plan.iter().map(|release| release.title.as_str()).collect();
         assert_eq!(
             titles,
@@ -4496,8 +4066,6 @@ mod tests {
         );
     }
 
-    // "el sur" answered with Tinker Bell, Pumpkinhead and True Romance: the indexer
-    // free-associates, and a card that shares no word with the question makes the app look broken.
     #[test]
     fn what_shares_no_word_with_the_question_is_not_an_answer() {
         let mut junk = release("Tinker Bell and the Lost Treasure 1080p", 2.0, 700);
@@ -4516,8 +4084,6 @@ mod tests {
         assert_eq!(found.films[0].title, "El Sur");
     }
 
-    // Seen live with "campeones": the film database titles it "Champions", so the card shared no
-    // word with her query, while every release is filed as Campeones. The releases get a vote.
     #[test]
     fn a_film_titled_in_another_language_is_still_found_by_its_releases() {
         let mut film = release("Campeones.2018.MULTi.1080p.WEB.H264-SAVER", 2.0, 300);
@@ -4533,8 +4099,6 @@ mod tests {
         assert!(found.films[0].relevance > 0.0);
     }
 
-    // The film database titles things in other languages; the name she picked, localized with
-    // the original beside it, must be the name the card, the library and the shelf then use.
     #[test]
     fn the_picked_name_follows_the_film_all_the_way_to_the_library() {
         let world = world_with(
@@ -4572,8 +4136,6 @@ mod tests {
         assert!(refused.is_err());
     }
 
-    // Seen live: the library believed copy 5 of 7 was downloading; nzbget had never heard of the
-    // id (a rejected nzb, or a lost queue). The screen said "empezando la descarga" forever.
     #[test]
     fn a_download_nzbget_has_lost_is_chased_like_a_dead_copy_not_waited_on_forever() {
         let world = world_with(
@@ -4584,10 +4146,8 @@ mod tests {
             200 * GIGABYTE,
         );
         let first = grab_first(&world);
-        // nzbget loses the id entirely: not in the queue, never reaches history
         world.downloader.queue.lock().expect("not poisoned").clear();
 
-        // before the chase acts, the screen must at least see the film as still being worked on
         let progress = world.orchestrator.progress();
         let ghost = progress
             .finished
@@ -4658,9 +4218,8 @@ mod tests {
         assert!(entry
             .story
             .iter()
-            .any(|note| note.said == messages::CANCELLED));
+            .any(|note| note.said == Lang::Es.cancelled()));
 
-        // the copy dying later must not resurrect the download she stopped
         world
             .downloader
             .history
@@ -4705,8 +4264,6 @@ mod tests {
     fn the_room_verdict_on_a_version_matches_the_rule_that_refuses_it() {
         let world = world_with(
             vec![release("Das Boot 1981 1080p BluRay x264-A", 2.0, 900)],
-            // between the old interface warning (1.4x) and the refusal (2.2x + reserve):
-            // exactly where she used to be told nothing and then refused
             4 * GIGABYTE,
         );
         world
@@ -4746,9 +4303,6 @@ mod tests {
         assert!(file.ends_with("Show.S01E02.mkv"));
     }
 
-    // A folder of files numbered by a scene release is not an evening she can choose from. The
-    // show she downloaded is remembered with the season, so its episodes can be named on her own
-    // shelf, months after the search that found them is gone.
     #[test]
     fn a_season_she_owns_names_its_episodes_from_the_show_database() {
         let world = world_with(Vec::new(), 200 * GIGABYTE);
@@ -4781,7 +4335,6 @@ mod tests {
         );
         assert_eq!(episodes[1].number, Some(2));
 
-        // a season the database has no name for is still a list she can play
         world.orchestrator.library.put(
             9,
             Entry {
@@ -4799,9 +4352,6 @@ mod tests {
         );
     }
 
-    // The season she downloaded before the app kept the show's ids knows neither which show it is
-    // nor which seasons it holds, and the search that knew both is long gone. Neither question
-    // needs it: the files state the season, and the show database answers to the name on her card.
     #[test]
     fn a_season_that_never_knew_its_show_identifies_itself_from_the_name_on_the_card() {
         let world = world_with(Vec::new(), 200 * GIGABYTE);
@@ -4842,9 +4392,6 @@ mod tests {
         );
     }
 
-    // A wrong name would be worse than no name: she would be reading another programme's episodes
-    // while this one plays. Which show a name is belongs to the provider, which has the ordering
-    // and the ids to decide it; what is decided here is that no answer leaves the season numbered.
     #[test]
     fn a_name_the_database_cannot_place_leaves_the_episodes_numbered() {
         struct NoIdea;
@@ -4902,8 +4449,6 @@ mod tests {
         );
     }
 
-    // Her own page for something she owns has the same words the search screen had, and asks for
-    // them by the id kept with the film rather than by a place in results long since replaced.
     #[test]
     fn what_she_owns_says_what_it_is_about_after_the_search_is_gone() {
         let mut world = world_with(Vec::new(), 200 * GIGABYTE);
@@ -4928,7 +4473,6 @@ mod tests {
             ["tt0082096"]
         );
 
-        // a season keeps the show's id with the tt the indexer files it under
         world.orchestrator.library.put(
             5,
             Entry {
@@ -4953,8 +4497,6 @@ mod tests {
         );
     }
 
-    // "Sin subtítulos en español en 2 de 12 episodios" named no episode, and this is the screen
-    // where naming one is worth something: she is choosing what to watch tonight.
     #[test]
     fn an_episode_says_whether_it_has_subtitles_she_can_read() {
         let world = world_with(Vec::new(), 200 * GIGABYTE);

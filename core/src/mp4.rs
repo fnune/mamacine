@@ -1,13 +1,10 @@
-//! Reading an MP4 header the way `matroska` reads Matroska: duration, frame rate and track
-//! languages out of the file's own bytes, so nothing has to ship a probe program.
+//! Reading an MP4 header without a probe program.
 
 use crate::media::MediaInfo;
 
-/// The same honest answer `matroska` gives: a track that says nothing is unknown, not English.
 const UNSPECIFIED: &str = "und";
 
-/// What the file says about itself, read from its `moov` box. MP4 files written for streaming
-/// carry `moov` at the front; others keep it at the end, so both ends of the file are offered.
+/// `moov` sits at either end; offer both.
 pub fn read_header(front: &[u8], tail: &[u8]) -> MediaInfo {
     let mut info = MediaInfo::default();
     let Some(moov) = find_moov(front).or_else(|| find_moov(tail)) else {
@@ -24,9 +21,6 @@ pub fn read_header(front: &[u8], tail: &[u8]) -> MediaInfo {
     info
 }
 
-/// The tail slice usually begins in the middle of a box, so there is nothing to walk from its
-/// start. Instead the `moov` name is scanned for, and a candidate counts only if the four bytes
-/// before it read as a size that fits what is left of the slice.
 fn find_moov(slice: &[u8]) -> Option<&[u8]> {
     for (at, window) in slice.windows(4).enumerate().skip(4) {
         if window != b"moov" {
@@ -83,15 +77,12 @@ fn read_track(trak: &[u8], info: &mut MediaInfo) {
 
 fn movie_duration(mvhd: &[u8]) -> Option<f64> {
     let (timescale, ticks) = timescale_and_duration(mvhd)?;
-    // all ones is the format's "duration unknown", in either width
     if timescale == 0 || ticks == u64::from(u32::MAX) || ticks == u64::MAX {
         return None;
     }
     Some(ticks as f64 / f64::from(timescale))
 }
 
-/// `mvhd` and `mdhd` share a layout up to the duration: version, flags, two timestamps whose
-/// width the version sets, then timescale and duration.
 fn timescale_and_duration(body: &[u8]) -> Option<(u32, u64)> {
     match body.first()? {
         0 => Some((u32_at(body, 12)?, u64::from(u32_at(body, 16)?))),
@@ -100,8 +91,6 @@ fn timescale_and_duration(body: &[u8]) -> Option<(u32, u64)> {
     }
 }
 
-/// The language is three letters squeezed into fifteen bits, each five bits holding a letter
-/// minus 0x60. An untagged track packs zeroes, which unpack to nothing readable.
 fn language_of(mdhd: &[u8]) -> Option<String> {
     let at = match mdhd.first()? {
         0 => 20,
@@ -118,7 +107,6 @@ fn language_of(mdhd: &[u8]) -> Option<String> {
 
 fn frame_rate(stts: &[u8], timescale: Option<u32>) -> Option<f64> {
     let timescale = timescale.filter(|timescale| *timescale > 0)?;
-    // version and flags, entry count, then each entry is a sample count and a tick delta
     let first_delta = u32_at(stts, 12).filter(|delta| *delta > 0)?;
     let fps = f64::from(timescale) / f64::from(first_delta);
     Some((fps * 1000.0).round() / 1000.0)
@@ -136,8 +124,6 @@ fn push(list: &mut Vec<String>, language: String) {
     }
 }
 
-/// Walks the boxes of one level, stopping at the first thing it cannot read. Every step consumes
-/// at least a header's worth of bytes, so no declared size can make it stand still.
 struct Boxes<'a> {
     rest: &'a [u8],
 }
@@ -156,7 +142,6 @@ impl<'a> Iterator for Boxes<'a> {
         let name = fourcc_at(self.rest, 4)?;
 
         let (header, size) = match declared {
-            // size zero means the box runs to the end of the file
             0 => (8, self.rest.len() as u64),
             1 => {
                 let large = u64_at(self.rest, 8)?;
@@ -199,7 +184,6 @@ fn u64_at(bytes: &[u8], at: usize) -> Option<u64> {
 mod tests {
     use super::*;
 
-    /// Builds boxes the way a muxer would, so the tests read the real format rather than a mock.
     fn boxed(name: &[u8; 4], body: &[u8]) -> Vec<u8> {
         let mut out = ((body.len() + 8) as u32).to_be_bytes().to_vec();
         out.extend(name);
@@ -220,7 +204,7 @@ mod tests {
 
     fn mvhd_v1(timescale: u32, duration: u64) -> Vec<u8> {
         let mut body = vec![1];
-        body.extend([0; 19]); // flags and two eight-byte timestamps
+        body.extend([0; 19]);
         body.extend(timescale.to_be_bytes());
         body.extend(duration.to_be_bytes());
         boxed(b"mvhd", &body)
@@ -281,7 +265,6 @@ mod tests {
     #[test]
     fn finds_moov_in_a_tail_that_starts_inside_another_box() {
         let mut middle = vec![0x6D; 10_000];
-        // a decoy: the name appears in the data, preceded by a size too large to be believed
         middle.splice(
             5_000..5_000,
             [0xFF, 0xFF, 0xFF, 0xFF, b'm', b'o', b'o', b'v'],

@@ -1,38 +1,31 @@
-//! Reading an nzb file for what it says about its own chances.
-//!
-//! An nzb lists every article the download will need, and which files are par2 repair data.
-//! Asked before anything is downloaded, that answers two questions nzbget can only answer by
-//! spending gigabytes: how much repair headroom the post carries, and — with the news server's
-//! help — how much of it is still there.
+//! What an nzb says about its own chances.
 
 use crate::error::{Error, Result};
 
-/// One posted file inside the nzb, with its own articles, so damage can be attributed to the
-/// file it sits in and checked against what the repair set claims to cover.
+/// One posted file, with its own articles.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PostedFile {
-    /// The file's own name from the subject's quotes, lowercased; None when the subject hides it.
+    /// From the subject's quotes; None when hidden.
     pub name: Option<String>,
     pub repair: bool,
     pub bytes: u64,
     pub ids: Vec<String>,
 }
 
-/// What one nzb file amounts to, before any of it is fetched.
+/// One nzb, before any of it is fetched.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Contents {
     pub files: Vec<PostedFile>,
-    /// Message-ids of the data articles (the film itself), in posting order, without brackets.
+    /// Data article ids, in posting order, unbracketed.
     pub data_ids: Vec<String>,
-    /// Message-ids of the repair articles. Takedowns hit these too — often first — and repair
-    /// data that is gone repairs nothing, however much the nzb claims to carry.
+    /// Repair article ids; takedowns hit these first.
     pub par_ids: Vec<String>,
     pub data_bytes: u64,
     pub par_bytes: u64,
 }
 
 impl Contents {
-    /// The share of the post that is repair data: how much loss it can absorb.
+    /// The share of the post that repairs.
     pub fn par_ratio(&self) -> f64 {
         if self.data_bytes == 0 {
             return 0.0;
@@ -40,8 +33,7 @@ impl Contents {
         self.par_bytes as f64 / self.data_bytes as f64
     }
 
-    /// An evenly spaced sample of data articles. Even rather than random: takedown holes spread
-    /// through a post, the spacing sees them, and a deterministic sample is a testable one.
+    /// Evenly spaced, deterministic sample of data articles.
     pub fn sample(&self, wanted: usize) -> Vec<&str> {
         spaced(&self.data_ids, wanted)
     }
@@ -51,8 +43,7 @@ impl Contents {
         spaced(&self.par_ids, wanted)
     }
 
-    /// The data sample with each article's owning file, so "damaged" can name a file and the
-    /// file can be checked against the repair set's own list.
+    /// The data sample, with each article's file.
     pub fn sample_with_files(&self, wanted: usize) -> Vec<(usize, &str)> {
         let mut owned: Vec<(usize, &str)> = Vec::new();
         for (position, file) in self.files.iter().enumerate() {
@@ -74,9 +65,7 @@ impl Contents {
         picked
     }
 
-    /// First articles from which the repair set's own table of contents can be read. The bare
-    /// ".par2" index when the post has one; otherwise the smallest volumes, because every par2
-    /// file repeats the set's vital packets — some posts (the Joy season, live) ship no index.
+    /// Articles that carry the repair set's contents.
     pub fn par_index_segments(&self) -> Vec<&str> {
         let mut repair: Vec<&PostedFile> = self.files.iter().filter(|file| file.repair).collect();
         repair.sort_by_key(|file| {
@@ -94,9 +83,7 @@ impl Contents {
             .collect()
     }
 
-    /// What the post can actually repair: the nzb's paper coverage, discounted by how much of
-    /// the repair data itself has been taken down. Ten percent of par2 on paper collapsed to
-    /// one percent in the field, and a copy was approved that could never be saved.
+    /// Paper coverage, discounted by missing repair data.
     pub fn effective_par(&self, par_missing_ratio: f64) -> f64 {
         self.par_ratio() * (1.0 - par_missing_ratio).max(0.0)
     }
@@ -118,8 +105,6 @@ fn spaced(ids: &[String], wanted: usize) -> Vec<&str> {
 
 pub fn read(nzb: &[u8]) -> Result<Contents> {
     let text = String::from_utf8_lossy(nzb);
-    // real nzb files carry a DOCTYPE, which roxmltree refuses unless told otherwise; found the
-    // hard way, live, when every fetched nzb came back "unreadable"
     let options = roxmltree::ParsingOptions {
         allow_dtd: true,
         ..roxmltree::ParsingOptions::default()
@@ -179,17 +164,13 @@ pub fn read(nzb: &[u8]) -> Result<Contents> {
     Ok(contents)
 }
 
-/// The file name a subject carries in quotes, which is the name the repair set knows it by.
 fn quoted_name(subject: &str) -> Option<String> {
     let start = subject.find('"')? + 1;
     let end = subject[start..].find('"')? + start;
     Some(subject[start..end].to_lowercase())
 }
 
-/// Whether a copy is beyond saving, judged from a sampled missing ratio against the post's own
-/// repair headroom. Deliberately conservative: a copy is only skipped when the sample says the
-/// loss clearly exceeds what par2 can absorb; anything uncertain goes to nzbget, whose slow
-/// verdict remains the ground truth.
+/// Conservative: anything uncertain goes to nzbget.
 pub fn beyond_repair(missing_ratio: f64, par_ratio: f64) -> bool {
     missing_ratio > 0.01 && missing_ratio > par_ratio
 }
@@ -251,8 +232,6 @@ mod tests {
         assert!((contents.par_ratio() - 0.0667).abs() < 0.001);
     }
 
-    // The field case: ten percent of par2 on paper, nearly all of it taken down. Paper coverage
-    // approved a copy nzbget then burned four gigabytes refusing.
     #[test]
     fn repair_data_that_is_gone_repairs_nothing() {
         let contents = Contents {
@@ -304,8 +283,6 @@ mod tests {
         .is_empty());
     }
 
-    // The Game of Thrones numbers, from the field: 6.1% of articles taken down against 6.0% of
-    // par2. nzbget needed nine gigabytes to learn this; the sample knows in seconds.
     #[test]
     fn a_copy_whose_loss_exceeds_its_repair_headroom_is_beyond_saving() {
         assert!(beyond_repair(0.061, 0.060));

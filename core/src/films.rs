@@ -1,10 +1,7 @@
-//! Turning a list of releases into a list of films.
-//!
-//! A search for one film returns dozens of releases of it, all with the same poster and different
-//! technical names. Choosing between them is this module's job, so that it is never hers.
+//! Turning releases into films, choosing between copies.
 
 use crate::indexer::SearchResult;
-use crate::release::{matches, Preference, Tag};
+use crate::release::{matches, names_another_language, Preference, Tag};
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Film {
@@ -13,7 +10,7 @@ pub struct Film {
     pub imdb: Option<String>,
     pub cover_url: Option<String>,
     pub about: String,
-    /// Best first. The first is what a tap on the poster downloads.
+    /// Best first; the first is downloaded.
     pub releases: Vec<SearchResult>,
 }
 
@@ -24,8 +21,11 @@ impl Film {
 }
 
 const GIGABYTE: f64 = 1_073_741_824.0;
+/// When the indexer states no runtime.
+const TYPICAL_FILM_HOURS: f64 = 1.75;
+const TOO_SMALL_TO_BE_THE_FILM_GB: f64 = 0.5;
 
-/// What a good copy looks like, in the order the signals actually matter.
+/// What a good copy looks like.
 pub fn quality_score(
     release: &SearchResult,
     preference: Preference,
@@ -37,12 +37,12 @@ pub fn quality_score(
     if matches(&release.tags, preference) {
         score += 500.0;
     }
-    if release.tags.contains(&Tag::Spanish) && preference == Preference::Spanish {
-        score += 150.0; // named outright, rather than a dual that might carry it
+    if let Preference::Language(code) = preference {
+        if release.tags.contains(&Tag::Dub(code)) {
+            score += 150.0;
+        }
     }
 
-    // Resolution counts for less than size: a 720p copy she can watch tonight beats a 1080p copy
-    // that fills her disk, and both look the same across a living room.
     score += if title.contains("2160p") || title.contains("4k") {
         -60.0
     } else if title.contains("1080p") {
@@ -50,13 +50,13 @@ pub fn quality_score(
     } else if title.contains("720p") {
         70.0
     } else if title.contains("480p") || title.contains("576p") || title.contains("360p") {
-        -90.0 // small enough to be tempting, and soft enough to spoil the film on a television
+        -90.0
     } else {
         0.0
     };
 
     score += if title.contains("remux") {
-        -150.0 // tens of gigabytes for a difference she will not see
+        -150.0
     } else if title.contains("bluray") || title.contains("blu-ray") {
         120.0
     } else if title.contains("web-dl") || title.contains("webdl") {
@@ -69,7 +69,6 @@ pub fn quality_score(
         0.0
     };
 
-    // the encodes that rot: old scene releases whose articles are half gone
     if title.contains("xvid") || title.contains("divx") || title.contains("dvdrip") {
         score -= 250.0;
     }
@@ -77,46 +76,47 @@ pub fn quality_score(
         score -= 400.0;
     }
 
-    // She watches on a normal screen, so the copy to take is the smallest one that still looks like
-    // a film. Around two gigabytes for a feature is plenty; four times that buys her nothing and
-    // costs her disk, her connection and her patience. Judged per hour, because two gigabytes is
-    // generous for a ninety minute film and thin for a three and a half hour one.
     let gigabytes = release.size_bytes as f64 / GIGABYTE;
     let hours = runtime_minutes
         .map(|minutes| minutes / 60.0)
-        .unwrap_or(1.75);
-    let per_hour = gigabytes / hours.max(0.5);
-    score += match per_hour {
-        rate if rate < 0.35 => -260.0, // too compressed to be worth the evening
-        rate if rate < 0.6 => 60.0,
-        rate if rate <= 1.8 => 220.0, // the copy to take
-        rate if rate <= 3.0 => 60.0,  // twice the size, for a difference she will not see
-        rate if rate <= 6.0 => -40.0,
-        _ => -200.0, // remux territory: tens of gigabytes for a difference she will not see
-    };
-    if gigabytes < 0.5 {
-        score -= 200.0; // whatever this is, it is not the film
+        .unwrap_or(TYPICAL_FILM_HOURS);
+    score += density_score(gigabytes / hours.max(0.5));
+    if gigabytes < TOO_SMALL_TO_BE_THE_FILM_GB {
+        score -= 200.0;
     }
 
-    // a release nobody has taken is a release nobody has checked
-    score += (f64::from(release.grabs.max(1) as u32).log10() * 40.0).min(140.0);
+    score += popularity_score(release.grabs);
     score -= rot_risk(release);
     score -= sideshow(&title);
 
-    // a dub into a language she never asked for serves her worse than the original with
-    // subtitles; seen live as a German.DL season pack sitting in the Spanish fall-through
-    if preference == Preference::Spanish
-        && release.tags.contains(&Tag::OtherLanguage)
-        && !release.tags.contains(&Tag::Spanish)
-    {
-        score -= 150.0;
+    if let Preference::Language(code) = preference {
+        if names_another_language(&release.tags, code) && !release.tags.contains(&Tag::Dub(code)) {
+            score -= 150.0;
+        }
     }
 
     score
 }
 
-/// Words that mean this is not actually the film: seen live as "Coco Sing-Along" carrying Coco's
-/// own id, one dead copy away from being downloaded in its place.
+/// A watchable film against a living-room screen: harshest on the too-compressed, hardest on
+/// remux territory, best around two gigabytes an hour.
+fn density_score(gigabytes_per_hour: f64) -> f64 {
+    match gigabytes_per_hour {
+        rate if rate < 0.35 => -260.0,
+        rate if rate < 0.6 => 60.0,
+        rate if rate <= 1.8 => 220.0,
+        rate if rate <= 3.0 => 60.0,
+        rate if rate <= 6.0 => -40.0,
+        _ => -200.0,
+    }
+}
+
+/// A release nobody has taken is a release nobody has checked.
+pub(crate) fn popularity_score(grabs: u64) -> f64 {
+    (f64::from(grabs.max(1) as u32).log10() * 40.0).min(140.0)
+}
+
+/// Words meaning this is not the film.
 pub fn sideshow(title: &str) -> f64 {
     const SIDESHOWS: [&str; 12] = [
         "sing along",
@@ -153,17 +153,10 @@ pub fn sideshow(title: &str) -> f64 {
         * 400.0
 }
 
-/// How likely this copy is to be half gone.
-///
-/// The indexer publishes no completeness figure, so this is inferred. Age is the mechanism:
-/// providers drop articles as a post ages, and a ten year old encode is missing parts of itself.
-/// Votes are the only direct evidence there is, and they are evidence of exactly one thing, since
-/// nobody downvotes a release that worked. There are rarely more than a dozen of them, so they are
-/// worth less than they look: enough to break a tie, not enough to overrule a copy thousands of
-/// people have taken.
+/// How likely this copy is half gone.
 pub fn rot_risk(release: &SearchResult) -> f64 {
     let mut risk = match release.age_days {
-        Some(age) if age > 3650.0 => 120.0, // a decade on, articles start going missing
+        Some(age) if age > 3650.0 => 120.0,
         Some(age) if age > 2200.0 => 40.0,
         _ => 0.0,
     };
@@ -172,7 +165,6 @@ pub fn rot_risk(release: &SearchResult) -> f64 {
     risk
 }
 
-/// The indexer reports a film's length as "149 min" among its other facts.
 fn runtime_of(film: &Film) -> Option<f64> {
     film.about
         .split(" · ")
@@ -181,8 +173,6 @@ fn runtime_of(film: &Film) -> Option<f64> {
 }
 
 pub fn group(results: Vec<SearchResult>, preference: Preference) -> Vec<Film> {
-    // keyed once, when the group is created: deriving it again from the display title would
-    // compare a film's name against a release's name and never match
     let mut grouped: Vec<(String, Film)> = Vec::new();
 
     for release in results {
@@ -227,7 +217,6 @@ pub fn group(results: Vec<SearchResult>, preference: Preference) -> Vec<Film> {
 fn film_key(release: &SearchResult) -> String {
     match &release.imdb {
         Some(id) => format!("imdb:{id}"),
-        // without an id, fall back to the words before the year
         None => format!("name:{}", normalised_name(&release.title)),
     }
 }
@@ -291,10 +280,6 @@ fn year_of(release: &SearchResult) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-
-    // Measured against the real listing for Das Boot: a 5.5 GB 1080p copy was being chosen over a
-    // 1.7 GB 720p one. Twice the size buys nothing across her living room, and costs her an evening
-    // of downloading.
     #[test]
     fn a_copy_twice_the_size_does_not_win_on_resolution_alone() {
         let big = release(
@@ -340,8 +325,6 @@ mod tests {
         }
     }
 
-    // Nobody downvotes a release that worked. It is the only evidence of completeness the indexer
-    // publishes: the Game of Thrones pack that arrived 6% short had eight downvotes and no upvotes.
     #[test]
     fn a_copy_people_complained_about_ranks_below_one_they_did_not() {
         let complained = voted("Das Boot 1981 1080p BluRay x264-A", 0, 8, 400.0);
@@ -362,7 +345,6 @@ mod tests {
         );
     }
 
-    // Otherwise a handful of votes would overrule the thousands of people it worked for.
     #[test]
     fn a_few_complaints_never_outweigh_a_copy_everybody_takes() {
         let popular = SearchResult {
@@ -391,7 +373,6 @@ mod tests {
     use crate::release::tags;
 
     fn release(title: &str, size_gb: f64, grabs: u64, imdb: Option<&str>) -> SearchResult {
-        // an indexer only sends metadata when it recognised the film, which is when it has an id
         let about = match imdb {
             Some(_) => "Das Boot · 1981 · ★8.4 · Drama, War · 149 min".to_string(),
             None => String::new(),
@@ -465,7 +446,6 @@ mod tests {
         assert!(films[0].best().expect("a pick").title.contains("FINE"));
     }
 
-    /// Two gigabytes is generous for ninety minutes and thin for three and a half hours.
     #[test]
     fn judges_size_against_how_long_the_film_runs() {
         let short = quality_score(
@@ -531,8 +511,6 @@ mod tests {
         );
     }
 
-    // Seen live: the indexer filed "Coco Sing-Along" under Coco's own id, so it sat in the group
-    // as an ordinary copy, one dead fall-through away from being the film she got.
     #[test]
     fn a_sing_along_never_outranks_the_film_itself() {
         let films = group(
@@ -555,8 +533,6 @@ mod tests {
         assert!(films[0].best().expect("a pick").title.contains("BluRay"));
     }
 
-    // Seen live: a German.DL season pack sat third in the Spanish fall-through, ahead of plain
-    // English copies whose missing Spanish at least has a subtitles remedy.
     #[test]
     fn a_dub_into_a_third_language_sinks_when_she_wants_spanish() {
         let german = release(
@@ -567,13 +543,50 @@ mod tests {
         );
         let plain = release("Film.2016.1080p.BluRay.x264-Plain", 2.0, 500, Some("1"));
         assert!(
-            quality_score(&plain, Preference::Spanish, Some(100.0))
-                > quality_score(&german, Preference::Spanish, Some(100.0))
+            quality_score(&plain, Preference::Language("es"), Some(100.0))
+                > quality_score(&german, Preference::Language("es"), Some(100.0))
         );
-        // the original of a French film is not punished under Original or Any
         assert_eq!(
             quality_score(&german, Preference::Any, Some(100.0)),
             quality_score(&plain, Preference::Any, Some(100.0))
+        );
+    }
+
+    #[test]
+    fn any_spanish_audio_matches_and_the_named_dub_ranks_first() {
+        let castellano = release(
+            "Film.2016.CASTELLANO.1080p.BluRay.x264-Es",
+            2.0,
+            500,
+            Some("1"),
+        );
+        let latino = release("Film.2016.LATINO.1080p.BluRay.x264-La", 2.0, 500, Some("1"));
+        let plain = release("Film.2016.1080p.BluRay.x264-Plain", 2.0, 500, Some("1"));
+        let score = |release| quality_score(release, Preference::Language("es"), Some(100.0));
+        assert!(score(&castellano) > score(&latino));
+        assert!(
+            score(&latino) > score(&plain),
+            "Spanish audio of any variety beats a copy that promises none"
+        );
+    }
+
+    #[test]
+    fn another_households_language_earns_the_same_courtesy() {
+        let french = release(
+            "Film.2016.TRUEFRENCH.1080p.BluRay.x264-Fr",
+            2.0,
+            500,
+            Some("1"),
+        );
+        let plain = release("Film.2016.1080p.BluRay.x264-Plain", 2.0, 500, Some("1"));
+        assert!(
+            quality_score(&french, Preference::Language("fr"), Some(100.0))
+                > quality_score(&plain, Preference::Language("fr"), Some(100.0))
+        );
+        assert!(
+            quality_score(&plain, Preference::Language("es"), Some(100.0))
+                > quality_score(&french, Preference::Language("es"), Some(100.0)),
+            "and a French dub sinks for a Spanish household"
         );
     }
 
@@ -594,7 +607,7 @@ mod tests {
                     Some("0082096"),
                 ),
             ],
-            Preference::Spanish,
+            Preference::Language("es"),
         );
         assert!(films[0].best().expect("a pick").title.contains("SPANISH"));
     }

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Builds an AppImage that runs on this machine, and on any other Linux, in a pinned container.
-#
-# Not from the Nix flake: a Nix-built binary links against store paths no other machine has, and its
-# webkit cannot reach the graphics drivers of a host that is not NixOS. The container carries an
-# ordinary distribution's libraries, which is what a portable bundle needs to be built against.
 set -euo pipefail
 
 image="docker.io/library/ubuntu:22.04"
@@ -12,10 +7,6 @@ rust_version="1.90.0"
 appimagetool_version="1.9.0"
 appimagetool_sha256="46fdd785094c7f6e545b61afcfb0f3d98d8eab243f644b4b17698c01d06083d1"
 
-# Every timestamp the bundle would otherwise take from the clock, so the same source produces the
-# same bytes here and in CI.
-# Not exported as SOURCE_DATE_EPOCH: mksquashfs refuses to take a timestamp from the environment
-# and from its own flags at once, and the flags below are the ones that make the bundle reproducible.
 epoch=1700000000
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -81,8 +72,6 @@ dist="/src/dist"
 mkdir -p "$dist"
 rm -f "$dist/MamaCine-x86_64.AppImage" "$dist/appdir-manifest.txt"
 
-# Tauri builds the AppDir and its own AppImage. The AppDir is what we want; the bundle it produces
-# is repacked below, because two things in it have to be corrected first.
 cargo tauri build --bundles appimage -- --locked
 
 bundle="$CARGO_TARGET_DIR/release/bundle/appimage"
@@ -94,13 +83,8 @@ fi
 
 export APPIMAGE_EXTRACT_AND_RUN=1
 
-# The bundle carries its own libwayland, but the host's mesa is what ends up loaded and it needs the
-# host's symbols. Leaving these in is what makes the window come up blank with EGL_BAD_PARAMETER.
 rm -f "$appdir"/usr/lib/libwayland-*.so.*
 
-# The GTK hook pins the backend to x11 outright. On a Wayland session that puts every frame through
-# XWayland, and scrolling stutters visibly for it. The window loses the desktop's own decorations
-# and draws its own instead, which is the cheaper of the two costs.
 if [[ -f "$appdir/apprun-hooks/linuxdeploy-plugin-gtk.sh" ]]; then
     # shellcheck disable=SC2016 # the hook expands these, not this script
     sed -i 's|^export GDK_BACKEND=x11|if [ -z "${GDK_BACKEND:-}" ]; then\n  if [ "${XDG_SESSION_TYPE:-}" = wayland ]; then export GDK_BACKEND=wayland; else export GDK_BACKEND=x11; fi\nfi|' \
@@ -116,7 +100,6 @@ appimagetool \
     --mksquashfs-opt -all-root \
     "$appdir" "$dist/MamaCine-x86_64.AppImage"
 
-# What went into the bundle, so two builds that disagree can be compared without moving 80 megabytes.
 {
     (cd "$appdir" && find . -type f -exec sha256sum {} + | sort -k2)
     (cd "$appdir" && find . -type l -printf '%p -> %l\n' | sort)

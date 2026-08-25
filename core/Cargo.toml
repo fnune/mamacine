@@ -3,6 +3,7 @@ name = "mamacine-core"
 description = "Indexer search, nzbget control and subtitle handling, with no user interface"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 serde = { workspace = true }
@@ -10,7 +11,5 @@ serde_json = { workspace = true }
 regex = "1"
 roxmltree = "0.20"
 ureq = "2"
-# NNTP STAT over TLS, to ask what still exists before downloading it. The ring provider is
-# pinned explicitly: it cross-compiles to the Windows build where aws-lc does not.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
 webpki-roots = "0.26"

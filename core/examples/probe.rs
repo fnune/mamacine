@@ -1,11 +1,3 @@
-//! Drives the real search pipeline against the real services and prints what the grid would
-//! show, in the order it would show it. For judging results with real data, without opening the
-//! app and without spending an API hit twice: every response is cached on disk.
-//!
-//!     cargo run -p mamacine-core --example probe -- "game of thrones"
-//!     cargo run -p mamacine-core --example probe -- --series "game of thrones"
-//!     cargo run -p mamacine-core --example probe -- --suggest "juego de tronos"
-
 use mamacine_core::clock::SystemClock;
 use mamacine_core::error::Result;
 use mamacine_core::http::{HttpClient, Request, Response};
@@ -19,7 +11,6 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 
-/// Answers from disk when it can, so re-running a probe costs the service nothing.
 struct CachedHttp {
     inner: Network,
     directory: PathBuf,
@@ -88,7 +79,6 @@ fn real_indexer() -> Newznab<CachedHttp, SystemClock> {
             .unwrap_or_default()
             .to_string()
     };
-    // the settings file may be the old single-indexer shape or the new list
     let (url, key) = match stored.get("indexers").and_then(|value| value.as_array()) {
         Some(rows) if !rows.is_empty() => (
             rows[0]["url"].as_str().unwrap_or_default().to_string(),
@@ -113,8 +103,6 @@ fn real_indexer() -> Newznab<CachedHttp, SystemClock> {
     )
 }
 
-/// The ids of the show she picked, the way the app gets them without a key: the IMDb suggestion
-/// she tapped, then the one free service that turns its id into the ids indexers file shows under.
 fn show_of(query: &str) -> (String, mamacine_core::indexer::ShowIds) {
     let lookup = Lookup::new(CachedHttp::new());
     let named = |ids| (query.to_string(), ids);
@@ -140,14 +128,11 @@ fn show_of(query: &str) -> (String, mamacine_core::indexer::ShowIds) {
     }
 }
 
-/// The best film and the best series her words name, resolved the way the app resolves a tapped
-/// row: the keyless pair, IMDb for the title and TVMaze for the ids the indexer files a show under.
 fn identify(query: &str) -> Vec<Picked> {
     let lookup = Lookup::new(CachedHttp::new());
     let Ok(found) = lookup.suggest(query) else {
         return Vec::new();
     };
-    // the provider's own order, so the first one is its answer to which of the two she meant
     let mut resolved: Vec<Picked> = Vec::new();
     for suggestion in &found {
         if resolved.iter().any(|done| done.series == suggestion.series) {
@@ -185,16 +170,16 @@ fn identify(query: &str) -> Vec<Picked> {
 
 fn show_search(query: &str, kind: Option<&str>) {
     let preference = match std::env::var("PROBE_LANG").as_deref() {
-        Ok("es") => Preference::Spanish,
         Ok("original") => Preference::Original,
+        Ok(code) => mamacine_core::release::known_language(code)
+            .map(Preference::Language)
+            .unwrap_or(Preference::Any),
         _ => Preference::Any,
     };
     let indexer = real_indexer();
     let indexers = [("real", &indexer as &dyn Indexer)];
     let parsed = Query::parse(query).expect("a query");
 
-    // the same identification the orchestrator does before it asks anything: her words name a
-    // thing, and the indexer is asked for the thing. Only words she typed need it.
     let identified = match (&parsed, kind) {
         (Query::Imdb(_), _) | (_, Some(_)) => Vec::new(),
         _ => identify(query),
@@ -202,13 +187,11 @@ fn show_search(query: &str, kind: Option<&str>) {
     let identified_as = |series: bool| identified.iter().find(|found| found.series == series);
     let (film, series) = (identified_as(false), identified_as(true));
     let recognised = !identified.is_empty();
-    // the provider's order is its answer to which of the two the name means
     let certain = |series: bool| match identified.first() {
         Some(first) if first.series != series => 2.0,
         _ => 3.0,
     };
 
-    // her own words are the question of last resort, for when nothing recognised them at all
     let film_question = match (film, recognised) {
         (Some(picked), _) => Query::parse(&picked.query),
         (None, false) => Some(parsed.clone()),
@@ -257,7 +240,6 @@ fn show_search(query: &str, kind: Option<&str>) {
     let films = mamacine_core::films::group(films_found, preference);
     let seasons = mamacine_core::series::group_seasons(seasons_found, preference, named);
 
-    // the same relevance the orchestrator computes: the display title and the release names
     let looks_like =
         |asked: &str, name: &str, releases: &[mamacine_core::indexer::SearchResult]| {
             releases
@@ -267,7 +249,6 @@ fn show_search(query: &str, kind: Option<&str>) {
                 .fold(relevance(asked, name), f64::max)
         };
 
-    // the same merged ordering the window applies
     let mut cards: Vec<(f64, String, Vec<String>)> = Vec::new();
     for film in &films {
         let best = film.best();
@@ -301,7 +282,7 @@ fn show_search(query: &str, kind: Option<&str>) {
             format!(
                 "[season] {:40} {}  {:.1} GB · {} grabs · {} releases",
                 season.show,
-                season.label,
+                season_label(season),
                 best.map(|release| release.size_bytes).unwrap_or(0) as f64 / 1_073_741_824.0,
                 best.map(|release| release.grabs).unwrap_or(0),
                 season.releases.len(),
@@ -327,7 +308,6 @@ fn show_search(query: &str, kind: Option<&str>) {
     if cards.len() > 14 {
         println!("  … and {} more", cards.len() - 14);
     }
-    // what the ficha would say the season holds
     if let (Some(tvmaze), Some(season)) = (&show.tvmaze, seasons.first()) {
         match mamacine_core::tvmaze::TvMaze::new(CachedHttp::new()).episodes(
             tvmaze,
@@ -335,7 +315,7 @@ fn show_search(query: &str, kind: Option<&str>) {
             season.last,
         ) {
             Ok(episodes) => {
-                println!("  {} · {} episodios:", season.label, episodes.len());
+                println!("  {} · {} episodios:", season_label(season), episodes.len());
                 for episode in episodes.iter().take(3) {
                     println!(
                         "    {}. {}",
@@ -347,7 +327,6 @@ fn show_search(query: &str, kind: Option<&str>) {
             Err(failure) => println!("  (no episode list: {failure})"),
         }
     }
-    // what a tap on the top card would actually fetch, and its fallbacks
     if let Some((_, _, releases)) = cards.first() {
         println!("  the pick, then the plan:");
         for release in releases {
@@ -381,8 +360,6 @@ fn show_suggestions(text: &str) {
     println!();
 }
 
-/// Fetches a season's top copies and asks the news server what still exists, without
-/// downloading a byte of film: the same pre-flight the app now runs before every append.
 fn show_stat(query: &str) {
     use mamacine_core::nntp::Prober;
     let indexer = real_indexer();
@@ -421,7 +398,7 @@ fn show_stat(query: &str) {
         retention_days: 0,
     };
 
-    println!("— {} · {} —", season.show, season.label);
+    println!("— {} · {} —", season.show, season_label(season));
     for release in season.releases.iter().take(4) {
         let Ok(nzb) = indexer.fetch_nzb(&release.nzb_url) else {
             println!("  (could not fetch nzb for {})", release.title);
@@ -463,7 +440,6 @@ fn show_stat(query: &str) {
                     },
                     started.elapsed(),
                 );
-                // the front-loaded repairs: is the repair data even real?
                 if missing > 0.0 {
                     let mut authentic = None;
                     for id in contents.par_index_segments().into_iter().take(2) {
@@ -502,5 +478,13 @@ fn main() {
         Some("--series") => show_search(&arguments[1..].join(" "), Some("series")),
         Some("--film") => show_search(&arguments[1..].join(" "), Some("film")),
         _ => show_search(&arguments.join(" "), None),
+    }
+}
+
+fn season_label(season: &mamacine_core::series::Season) -> String {
+    if season.first == season.last {
+        format!("Temporada {}", season.first)
+    } else {
+        format!("Temporadas {} a {}", season.first, season.last)
     }
 }

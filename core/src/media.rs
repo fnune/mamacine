@@ -1,7 +1,4 @@
-//! What a finished file actually contains, and where its subtitles belong.
-//!
-//! The parsing and the decisions are here and pure; running ffprobe and moving files is the
-//! application's job, because those are the parts a test should never do.
+//! What a finished file actually contains.
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -14,11 +11,19 @@ pub struct MediaInfo {
     pub subtitle_languages: Vec<String>,
 }
 
-pub const SPANISH_CODES: [&str; 5] = ["spa", "es", "esp", "cast", "spanish"];
 const UNKNOWN: &str = "und";
 
+const TRACK_CODES: &[(&str, &[&str])] = &[
+    ("es", &["spa", "es", "esp", "cast", "spanish"]),
+    ("en", &["eng", "en", "english"]),
+    ("fr", &["fra", "fre", "fr", "french"]),
+    ("de", &["ger", "deu", "de", "german"]),
+    ("it", &["ita", "it", "italian"]),
+    ("pt", &["por", "pt", "portuguese"]),
+];
+
 impl MediaInfo {
-    /// Untagged tracks say nothing about the language, so they are never counted as evidence.
+    /// Untagged tracks are never counted as evidence.
     pub fn known_languages(&self) -> Vec<&str> {
         self.audio_languages
             .iter()
@@ -28,13 +33,27 @@ impl MediaInfo {
             .collect()
     }
 
-    pub fn has_spanish(&self) -> bool {
-        self.known_languages()
+    /// A regional form counts as its base language.
+    pub fn has_language(&self, language: &str) -> bool {
+        let spellings = TRACK_CODES
             .iter()
-            .any(|code| SPANISH_CODES.contains(code))
+            .find(|(code, _)| *code == language)
+            .map(|(_, spellings)| *spellings);
+        self.known_languages().iter().any(|track| {
+            let track = track.to_lowercase();
+            let base = track.split('-').next().unwrap_or(track.as_str());
+            match spellings {
+                Some(spellings) => spellings.contains(&base),
+                None => base == language,
+            }
+        })
     }
 
-    /// The honest third answer: the file simply does not say.
+    pub fn has_spanish(&self) -> bool {
+        self.has_language("es")
+    }
+
+    /// The file simply does not say.
     pub fn language_is_unknown(&self) -> bool {
         self.known_languages().is_empty()
     }
@@ -43,7 +62,7 @@ impl MediaInfo {
 pub const VIDEO_SUFFIXES: [&str; 5] = ["mkv", "mp4", "avi", "m4v", "mov"];
 pub const SUBTITLE_SUFFIXES: [&str; 4] = ["srt", "ass", "ssa", "sub"];
 
-const LANGUAGE_WORDS: [(&str, &[&str]); 4] = [
+const LANGUAGE_WORDS: [(&str, &[&str]); 6] = [
     (
         "es",
         &[
@@ -63,6 +82,8 @@ const LANGUAGE_WORDS: [(&str, &[&str]); 4] = [
         &["french", "francais", "français", "fra", "fre", "fr"],
     ),
     ("de", &["german", "deutsch", "ger", "deu", "de", "aleman"]),
+    ("it", &["italian", "italiano", "ita", "it"]),
+    ("pt", &["portuguese", "portugues", "português", "pt"]),
 ];
 
 pub fn subtitle_language(file_name: &str) -> Option<&'static str> {
@@ -80,11 +101,7 @@ pub fn subtitle_language(file_name: &str) -> Option<&'static str> {
         .map(|(code, _)| *code)
 }
 
-/// Whether a subtitle in this language already sits beside the film, named after it.
-///
-/// The only record of what was fetched last week is the file itself: nothing else survives a
-/// restart, and asking again cost a download from somebody else's daily allowance and left a
-/// second copy of the same dialogue in her player's menu.
+/// A same-named subtitle already beside the film.
 pub fn subtitle_beside(video: &Path, files: &[PathBuf], language: &str) -> bool {
     let Some(stem) = video.file_stem().and_then(|stem| stem.to_str()) else {
         return false;
@@ -113,7 +130,7 @@ pub struct Move {
     pub language: String,
 }
 
-/// Players only load subtitles that sit beside the film and share its name.
+/// Players load only same-named subtitles beside the film.
 pub fn plan_subtitle_moves(video: &Path, subtitles: &[PathBuf]) -> Vec<Move> {
     let Some(stem) = video.file_stem().and_then(|stem| stem.to_str()) else {
         return Vec::new();
@@ -126,7 +143,7 @@ pub fn plan_subtitle_moves(video: &Path, subtitles: &[PathBuf]) -> Vec<Move> {
             continue;
         };
         if subtitle.parent() == Some(folder) && name.starts_with(stem) {
-            continue; // already where a player will find it
+            continue;
         }
         let extension = subtitle
             .extension()
@@ -169,7 +186,6 @@ mod tests {
 
     #[test]
     fn an_untagged_track_is_unknown_rather_than_foreign() {
-        // the Chilean film whose audio is Spanish but carries no tag
         let info = spoken(&["und"]);
         assert!(info.language_is_unknown());
         assert!(!info.has_spanish(), "unknown is not a claim either way");
@@ -181,6 +197,20 @@ mod tests {
         for code in ["spa", "es", "esp"] {
             assert!(spoken(&[code]).has_spanish(), "{code}");
         }
+    }
+
+    #[test]
+    fn a_regional_track_counts_as_its_base_language() {
+        for code in ["es-419", "es-MX", "es-AR"] {
+            assert!(spoken(&[code]).has_spanish(), "{code}");
+            assert!(spoken(&[code]).has_language("es"), "{code}");
+        }
+        let brazilian = MediaInfo {
+            subtitle_languages: vec!["pt-BR".into()],
+            ..MediaInfo::default()
+        };
+        assert!(brazilian.has_language("pt"));
+        assert!(!brazilian.has_language("es"));
     }
 
     #[test]
@@ -207,9 +237,6 @@ mod tests {
         assert!(info.has_spanish());
     }
 
-    // Every "Buscar subtítulos" downloaded all twelve episodes again, because the app looked at
-    // the tracks inside the file and at the pack's own subtitles, and never at the file it had
-    // written itself. Four copies of the same dialogue, and the day's allowance spent on them.
     #[test]
     fn a_subtitle_already_beside_the_film_is_one_that_need_not_be_fetched_again() {
         let video = PathBuf::from("/x/Gomorrah.S01E01.Bluray.x265-iVy.mkv");

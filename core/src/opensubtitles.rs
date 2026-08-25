@@ -1,22 +1,25 @@
-//! The subtitle service. Metered, so every call it does not have to make is a call it does not get.
+//! The subtitle service, metered by somebody else.
 
-use crate::clock::Clock;
+use crate::clock::{parse_utc_instant, Clock};
 use crate::error::{Error, Result};
-use crate::http::{expect_success, HttpClient, Request};
+use crate::http::{expect_success, HttpClient, Request, Response};
 use crate::settings::SubtitleSettings;
 use crate::subtitles::Candidate;
 use serde_json::Value;
 use std::sync::Mutex;
 
-/// Their login endpoint allows one request a second per address, and the token lasts a day.
 const TOKEN_LIFETIME_SECONDS: i64 = 20 * 3600;
 const SEARCH_CACHE_SECONDS: i64 = 7 * 86_400;
+/// A throttle pauses; only 406 spends the day.
+pub const THROTTLE_PAUSE_SECONDS: i64 = 15 * 60;
+const QUOTA_FALLBACK_SECONDS: i64 = 24 * 3600;
 
 #[derive(Default)]
 struct Cached {
     token: Option<(String, i64)>,
     searches: Vec<(String, i64, Vec<Candidate>)>,
     downloads_remaining: Option<i64>,
+    downloads_blocked_until: Option<i64>,
 }
 
 pub trait SubtitleSource: Send + Sync {
@@ -44,7 +47,6 @@ impl SubtitleQuery {
         if let Some(hash) = &self.movie_hash {
             parameters.push(("moviehash", hash.clone()));
         }
-        // an older download carries no id, and a hand-dropped file never had one
         if self.imdb_id.is_none() {
             if let Some(name) = &self.file_name {
                 parameters.push(("query", name.clone()));
@@ -83,7 +85,6 @@ impl<H: HttpClient, C: Clock> OpenSubtitles<H, C> {
     fn request(&self, request: Request) -> Request {
         request
             .header("Api-Key", self.settings.api_key.clone())
-            // enforced against the consumer name registered with them, on search
             .header("User-Agent", self.settings.user_agent.clone())
             .header("Accept", "application/json")
     }
@@ -132,9 +133,7 @@ impl<H: HttpClient, C: Clock> OpenSubtitles<H, C> {
         format!("{}{path}", self.settings.base_url().trim_end_matches('/'))
     }
 
-    /// Whether the key and the account behind it actually work, checked from the settings screen
-    /// rather than discovered after a film has already arrived. Logging in validates both, and
-    /// spends no search.
+    /// Logging in validates key and account, spending nothing.
     pub fn check_account(&self) -> Result<()> {
         self.token().map(|_| ())
     }
@@ -155,15 +154,16 @@ impl<H: HttpClient, C: Clock> SubtitleSource for OpenSubtitles<H, C> {
         }
         let key = query.cache_key();
         let now = self.clock.unix_seconds();
-        if let Some((_, _, found)) = self
-            .cached
-            .lock()
-            .expect("not poisoned")
-            .searches
-            .iter()
-            .find(|(cached, at, _)| cached == &key && now - at < SEARCH_CACHE_SECONDS)
         {
-            return Ok(found.clone());
+            let mut cached = self.cached.lock().expect("not poisoned");
+            cached
+                .searches
+                .retain(|(_, at, _)| now - at < SEARCH_CACHE_SECONDS);
+            if let Some((_, _, found)) =
+                cached.searches.iter().find(|(cached, _, _)| cached == &key)
+            {
+                return Ok(found.clone());
+            }
         }
 
         let query_string: Vec<String> = query
@@ -190,26 +190,24 @@ impl<H: HttpClient, C: Clock> SubtitleSource for OpenSubtitles<H, C> {
         let request = self
             .request(Request::post_json(self.url("/download"), &body))
             .header("Authorization", format!("Bearer {}", self.token()?));
-        let answer = match self.json(request) {
-            Ok(answer) => answer,
-            // "too many requests" is the allowance answering, and it answers the same way for
-            // every episode after it: a season used to spend forty-nine refusals finding that out
-            Err(failure) => {
-                if let Error::Refused { status: 429, .. } = failure {
-                    self.cached
-                        .lock()
-                        .expect("not poisoned")
-                        .downloads_remaining = Some(0);
-                }
-                return Err(failure);
-            }
-        };
+        let response = self.http.send(request)?;
+        if !(200..300).contains(&response.status) {
+            self.note_refusal(&response);
+            return Err(expect_success("opensubtitles", response).expect_err("not a success"));
+        }
+        let answer: Value =
+            serde_json::from_slice(&response.body).map_err(|failure| Error::Unreadable {
+                what: "opensubtitles".into(),
+                detail: failure.to_string(),
+            })?;
 
         if let Some(remaining) = answer.get("remaining").and_then(Value::as_i64) {
-            self.cached
-                .lock()
-                .expect("not poisoned")
-                .downloads_remaining = Some(remaining);
+            let mut cached = self.cached.lock().expect("not poisoned");
+            cached.downloads_remaining = Some(remaining);
+            if remaining <= 0 {
+                cached.downloads_blocked_until =
+                    Some(reset_named(&answer, self.clock.unix_seconds()));
+            }
         }
         let link = answer
             .get("link")
@@ -219,18 +217,51 @@ impl<H: HttpClient, C: Clock> SubtitleSource for OpenSubtitles<H, C> {
                 detail: "the download gave no link".into(),
             })?;
 
-        // the link is on a plain file host and must not carry the api key
         let file =
             Request::get(link.to_string()).header("User-Agent", self.settings.user_agent.clone());
         Ok(expect_success("the subtitle file host", self.http.send(file)?)?.body)
     }
 
     fn downloads_remaining(&self) -> Option<i64> {
-        self.cached
-            .lock()
-            .expect("not poisoned")
-            .downloads_remaining
+        let now = self.clock.unix_seconds();
+        let mut cached = self.cached.lock().expect("not poisoned");
+        match cached.downloads_blocked_until {
+            Some(until) if now < until => return Some(0),
+            Some(_) => {
+                cached.downloads_blocked_until = None;
+                if cached.downloads_remaining == Some(0) {
+                    cached.downloads_remaining = None;
+                }
+            }
+            None => {}
+        }
+        cached.downloads_remaining
     }
+}
+
+impl<H: HttpClient, C: Clock> OpenSubtitles<H, C> {
+    fn note_refusal(&self, response: &Response) {
+        let now = self.clock.unix_seconds();
+        let mut cached = self.cached.lock().expect("not poisoned");
+        match response.status {
+            406 => {
+                cached.downloads_remaining = Some(0);
+                let answer: Value = serde_json::from_slice(&response.body).unwrap_or(Value::Null);
+                cached.downloads_blocked_until = Some(reset_named(&answer, now));
+            }
+            429 => cached.downloads_blocked_until = Some(now + THROTTLE_PAUSE_SECONDS),
+            _ => {}
+        }
+    }
+}
+
+fn reset_named(answer: &Value, now: i64) -> i64 {
+    answer
+        .get("reset_time_utc")
+        .and_then(Value::as_str)
+        .and_then(parse_utc_instant)
+        .filter(|instant| *instant > now)
+        .unwrap_or(now + QUOTA_FALLBACK_SECONDS)
 }
 
 pub fn parse_candidates(answer: &Value) -> Vec<Candidate> {
@@ -443,8 +474,6 @@ mod tests {
         );
     }
 
-    // A season of twelve episodes spent forty-nine refusals discovering the allowance was gone,
-    // once per episode and three times over: the refusal itself is the allowance answering.
     #[test]
     fn a_refusal_for_too_many_requests_is_the_allowance_answering() {
         let service = service(vec![
@@ -459,6 +488,84 @@ mod tests {
             service.http.requests().len(),
             before,
             "the next episode must not ask again"
+        );
+    }
+
+    #[test]
+    fn a_throttle_pause_ends_rather_than_lasting_until_a_restart() {
+        let service = service(vec![
+            FakeHttp::status(200, r#"{"token":"signed"}"#),
+            FakeHttp::status(429, r#"{"message":"throttle limit reached"}"#),
+            FakeHttp::status(200, r#"{"link":"https://files.test/1","remaining":9}"#),
+            FakeHttp::status(200, "hola"),
+        ]);
+        assert!(service.download(11).is_err());
+        assert_eq!(
+            service.downloads_remaining(),
+            Some(0),
+            "paused while throttled"
+        );
+        service.clock.advance(THROTTLE_PAUSE_SECONDS + 1);
+        assert_eq!(
+            service.downloads_remaining(),
+            None,
+            "unknown, not still zero"
+        );
+        assert_eq!(service.download(11).expect("after the pause"), b"hola");
+    }
+
+    #[test]
+    fn the_daily_quota_refusal_blocks_until_the_reset_it_names() {
+        let service = service(vec![
+            FakeHttp::status(200, r#"{"token":"signed"}"#),
+            FakeHttp::status(
+                406,
+                r#"{"remaining":0,"message":"quota reached","reset_time_utc":"1970-01-01T01:00:00.000Z"}"#,
+            ),
+            FakeHttp::status(200, r#"{"link":"https://files.test/1","remaining":19}"#),
+            FakeHttp::status(200, "hola"),
+        ]);
+        assert!(matches!(
+            service.download(11),
+            Err(Error::Refused { status: 406, .. })
+        ));
+        let before = service.http.requests().len();
+        assert!(matches!(service.download(22), Err(Error::Setup(_))));
+        assert_eq!(
+            service.http.requests().len(),
+            before,
+            "it must not ask while the allowance is spent"
+        );
+        service.clock.advance(2601);
+        assert_eq!(service.download(22).expect("after the reset"), b"hola");
+    }
+
+    #[test]
+    fn a_quota_refusal_naming_no_reset_blocks_for_a_day_not_forever() {
+        let service = service(vec![
+            FakeHttp::status(200, r#"{"token":"signed"}"#),
+            FakeHttp::status(406, r#"{"message":"quota reached"}"#),
+        ]);
+        assert!(service.download(11).is_err());
+        assert_eq!(service.downloads_remaining(), Some(0));
+        service.clock.advance(24 * 3600 + 1);
+        assert_eq!(
+            service.downloads_remaining(),
+            None,
+            "a new day starts unknown"
+        );
+    }
+
+    #[test]
+    fn expired_searches_are_pruned_rather_than_hoarded() {
+        let service = service(vec![search_answer(), search_answer()]);
+        service.find(&query()).expect("candidates");
+        service.clock.advance(SEARCH_CACHE_SECONDS + 1);
+        service.find(&query()).expect("candidates again");
+        assert_eq!(
+            service.cached.lock().expect("not poisoned").searches.len(),
+            1,
+            "the stale answer is gone, not merely shadowed"
         );
     }
 

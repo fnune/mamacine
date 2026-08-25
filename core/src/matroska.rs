@@ -1,12 +1,7 @@
-//! Reading what a Matroska file says about itself, from its own header.
-//!
-//! This exists so the app does not have to carry ffmpeg. It needs two things from a finished film:
-//! how long it runs, and what languages its tracks are in. Both sit in the first megabyte, in a
-//! format simple enough to read directly.
+//! Reading a Matroska header without carrying ffmpeg.
 
 use crate::media::MediaInfo;
 
-// The elements worth reading, by their EBML identifier.
 const SEGMENT: u64 = 0x1853_8067;
 const INFO: u64 = 0x1549_A966;
 const TIMECODE_SCALE: u64 = 0x002A_D7B1;
@@ -22,23 +17,20 @@ const TRACK_VIDEO: u64 = 1;
 const TRACK_AUDIO: u64 = 2;
 const TRACK_SUBTITLE: u64 = 17;
 
-/// The specification says a track without a language element is English. In practice a release
-/// omits the tag exactly when nobody set one, and a Chilean film whose audio track says nothing is
-/// not English. Reporting it as unknown is the honest answer; reporting it as English is a claim.
 const UNSPECIFIED: &str = "und";
 
 pub fn looks_like_matroska(bytes: &[u8]) -> bool {
     bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3])
 }
 
-/// Reads as much as the given bytes allow. The caller passes the front of the file, not all of it.
+/// Reads as much as the bytes allow.
 pub fn read_header(bytes: &[u8]) -> MediaInfo {
     let mut info = MediaInfo::default();
     if !looks_like_matroska(bytes) {
         return info;
     }
 
-    let mut scale = 1_000_000.0; // nanoseconds per tick, and Matroska's default
+    let mut scale = 1_000_000.0;
     let mut ticks = None;
 
     for (id, body) in Elements::over(bytes) {
@@ -80,7 +72,6 @@ fn read_track(body: &[u8], info: &mut MediaInfo) {
     for (id, body) in Elements::over(body) {
         match id {
             TRACK_TYPE => kind = unsigned(body),
-            // the BCP 47 form wins where both are present, as the specification says
             LANGUAGE if language.is_none() => language = text(body),
             LANGUAGE_BCP47 => language = text(body),
             DEFAULT_DURATION => frame_nanoseconds = Some(unsigned(body)),
@@ -108,7 +99,6 @@ fn push(list: &mut Vec<String>, language: String) {
     }
 }
 
-/// Walks the elements of one level, stopping at the first thing it cannot read.
 struct Elements<'a> {
     rest: &'a [u8],
 }
@@ -126,7 +116,6 @@ impl<'a> Iterator for Elements<'a> {
         let (id, after_id) = variable_width(self.rest, true)?;
         let (size, after_size) = variable_width(after_id, false)?;
 
-        // an unknown size means the element runs to the end of what we were given
         let length = if size == u64::MAX {
             after_size.len()
         } else {
@@ -138,19 +127,16 @@ impl<'a> Iterator for Elements<'a> {
     }
 }
 
-/// EBML numbers are prefixed by the count of leading zero bits. Identifiers keep that marker;
-/// everything else strips it.
 fn variable_width(bytes: &[u8], keep_marker: bool) -> Option<(u64, &[u8])> {
     let first = *bytes.first()?;
     if first == 0 {
-        return None; // more than eight bytes wide, which nothing here uses
+        return None;
     }
     let width = first.leading_zeros() as usize + 1;
     if bytes.len() < width {
         return None;
     }
 
-    // at the widest, the marker uses the whole first byte and every data bit is in the ones after
     let data_bits = if width >= 8 { 0 } else { 0xFF_u8 >> width };
     let mut value = if keep_marker {
         u64::from(first)
@@ -161,7 +147,6 @@ fn variable_width(bytes: &[u8], keep_marker: bool) -> Option<(u64, &[u8])> {
         value = (value << 8) | u64::from(*byte);
     }
 
-    // all data bits set is Matroska's "size unknown"
     if !keep_marker && value == (1u64 << (7 * width)) - 1 {
         value = u64::MAX;
     }
@@ -194,7 +179,6 @@ fn text(bytes: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
-    /// Builds elements the way a muxer would, so the tests read the real format rather than a mock.
     fn element(id: u64, body: &[u8]) -> Vec<u8> {
         let mut out = id_bytes(id);
         out.extend(size_bytes(body.len() as u64));
@@ -226,7 +210,7 @@ mod tests {
         let info = element(
             INFO,
             &[
-                element(TIMECODE_SCALE, &[0x0F, 0x42, 0x40]).as_slice(), // a million nanoseconds
+                element(TIMECODE_SCALE, &[0x0F, 0x42, 0x40]).as_slice(),
                 element(DURATION, &12_488_544.0f64.to_be_bytes()).as_slice(),
             ]
             .concat(),
@@ -293,8 +277,29 @@ mod tests {
         assert!(info.has_spanish());
     }
 
-    /// The specification would call this English. Saying so about a film that merely forgot to tag
-    /// its audio is a false claim, and the interface is built on never making one.
+    #[test]
+    fn the_regional_ietf_tag_wins_over_the_three_letter_one() {
+        for ietf_first in [false, true] {
+            let three_letter = element(LANGUAGE, b"spa");
+            let ietf = element(LANGUAGE_BCP47, b"es-419");
+            let mut parts = vec![element(TRACK_TYPE, &[TRACK_AUDIO as u8])];
+            if ietf_first {
+                parts.extend([ietf, three_letter]);
+            } else {
+                parts.extend([three_letter, ietf]);
+            }
+            let track = element(TRACK_ENTRY, &parts.concat());
+            let mut file = vec![0x1A, 0x45, 0xDF, 0xA3, 0x84, 0x00, 0x00, 0x00, 0x00];
+            file.extend(element(SEGMENT, &element(TRACKS, &track)));
+            let info = read_header(&file);
+            assert_eq!(info.audio_languages, vec!["es-419"]);
+            assert!(
+                info.has_spanish(),
+                "the region never disqualifies the language"
+            );
+        }
+    }
+
     #[test]
     fn a_track_that_does_not_say_is_unknown_rather_than_english() {
         let track = element(TRACK_ENTRY, &element(TRACK_TYPE, &[TRACK_AUDIO as u8]));
@@ -306,13 +311,10 @@ mod tests {
         assert!(!info.has_spanish());
     }
 
-    /// A film of any size writes its Segment length across eight bytes. Every real file does this,
-    /// and reading one used to overflow a shift and take the whole finishing thread down with it.
     #[test]
     fn reads_a_length_written_across_eight_bytes() {
         let mut file = vec![0x1A, 0x45, 0xDF, 0xA3, 0x84, 0x00, 0x00, 0x00, 0x00];
         file.extend(id_bytes(SEGMENT));
-        // 0x01 marks eight bytes wide, and the seven that follow carry the length
         file.push(0x01);
         let body = element(
             TRACKS,
@@ -336,7 +338,7 @@ mod tests {
     fn a_length_of_unknown_size_is_read_to_the_end() {
         let mut file = vec![0x1A, 0x45, 0xDF, 0xA3, 0x84, 0x00, 0x00, 0x00, 0x00];
         file.extend(id_bytes(SEGMENT));
-        file.push(0xFF); // one byte wide, every data bit set: size unknown
+        file.push(0xFF);
         file.extend(element(
             TRACKS,
             &element(

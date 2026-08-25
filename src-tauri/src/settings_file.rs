@@ -1,12 +1,9 @@
-//! Reading configuration from disk. Deliberately the only module that does.
-
 use mamacine_core::nzbget::Tools;
 use mamacine_core::settings::{IndexerSettings, NewsServer, Settings, SubtitleSettings};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
 
-/// One place to search. Adding another is how the app learns to find more.
 #[derive(Clone, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct StoredIndexer {
@@ -16,8 +13,6 @@ pub struct StoredIndexer {
     pub enabled: bool,
 }
 
-/// Bumped when the shape or meaning of a field changes; `read` migrates older files and `write`
-/// refuses to clobber newer ones, because this app will be updated again.
 pub const SETTINGS_VERSION: u32 = 2;
 
 #[derive(Clone, Deserialize, Serialize, PartialEq)]
@@ -25,7 +20,6 @@ pub const SETTINGS_VERSION: u32 = 2;
 pub struct StoredSettings {
     pub version: u32,
     pub indexers: Vec<StoredIndexer>,
-    /// What the app stored before it could hold more than one. Read once, then written as a list.
     pub indexer_url: String,
     pub indexer_key: String,
     pub news_host: String,
@@ -40,13 +34,12 @@ pub struct StoredSettings {
     pub subtitles_user: String,
     pub subtitles_password: String,
     pub destination: Option<PathBuf>,
-    /// Which language she prefers a film in: "es", "original" or "any". A fact about her, set
-    /// once here, rather than a chip she has to press before every search.
     pub language: String,
-    /// Open with the computer, so the app is simply there, like the clock.
+    pub subtitles_language: String,
+    pub tmdb_language: String,
+    /// The language the interface speaks ("es", "en"). Empty means the computer's.
+    pub ui_language: String,
     pub autostart: bool,
-    /// Closing the window keeps the downloads going, tucked into the tray by the clock. On by
-    /// default: a download she started should not die because she tidied a window away.
     pub keep_running: bool,
 }
 
@@ -61,7 +54,6 @@ impl Default for StoredSettings {
             news_port: 0,
             news_user: String::new(),
             news_password: String::new(),
-            // news servers hand out port 563 with TLS; plain text is the thing to opt into
             news_encrypted: true,
             news_connections: 0,
             tmdb_key: String::new(),
@@ -71,6 +63,9 @@ impl Default for StoredSettings {
             subtitles_password: String::new(),
             destination: None,
             language: "any".into(),
+            subtitles_language: String::new(),
+            tmdb_language: String::new(),
+            ui_language: String::new(),
             autostart: false,
             keep_running: true,
         }
@@ -88,7 +83,7 @@ pub fn read(handle: &AppHandle) -> StoredSettings {
         return StoredSettings::default();
     };
     let Ok(bytes) = std::fs::read(&path) else {
-        return StoredSettings::default(); // the first run ever
+        return StoredSettings::default();
     };
     match serde_json::from_slice::<StoredSettings>(&bytes) {
         Ok(mut stored) => {
@@ -96,8 +91,6 @@ pub fn read(handle: &AppHandle) -> StoredSettings {
             stored
         }
         Err(_) => {
-            // a newer file that this version cannot read must survive a downgrade untouched;
-            // anything else unreadable is set aside rather than silently replaced with nothing
             if !newer_than_app(&bytes) {
                 let stamp = std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -110,7 +103,6 @@ pub fn read(handle: &AppHandle) -> StoredSettings {
     }
 }
 
-/// Whether the file on disk was written by a version of the app newer than this one.
 pub fn newer_than_app(bytes: &[u8]) -> bool {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
@@ -119,7 +111,6 @@ pub fn newer_than_app(bytes: &[u8]) -> bool {
         .unwrap_or(false)
 }
 
-/// A settings file written before the app could hold several indexers still describes one.
 fn migrate(stored: &mut StoredSettings) {
     if !stored.indexers.is_empty() || stored.indexer_key.trim().is_empty() {
         return;
@@ -135,7 +126,6 @@ fn migrate(stored: &mut StoredSettings) {
     stored.indexer_key = String::new();
 }
 
-/// A name she would recognise, taken from the address, until someone types a better one.
 fn name_from(url: &str) -> String {
     url.split("://")
         .nth(1)
@@ -144,9 +134,6 @@ fn name_from(url: &str) -> String {
         .unwrap_or_else(|| "Buscador".to_string())
 }
 
-/// What the window sent, folded into what was stored. Pure, because the last defect here was
-/// silent: the port arrived as the string every input field produces, the number parse quietly
-/// failed, and editing the port did nothing at all.
 pub fn apply(stored: &mut StoredSettings, incoming: &serde_json::Value) {
     let text = |field: &str| {
         incoming
@@ -155,7 +142,6 @@ pub fn apply(stored: &mut StoredSettings, incoming: &serde_json::Value) {
             .map(str::trim)
             .map(str::to_string)
     };
-    // an input field yields text even when it holds a number; both spellings must count
     let number = |field: &str| {
         incoming.get(field).and_then(|value| {
             value
@@ -164,7 +150,6 @@ pub fn apply(stored: &mut StoredSettings, incoming: &serde_json::Value) {
         })
     };
 
-    // the whole list arrives at once: rows are added and removed in the window, not here
     if let Some(rows) = incoming
         .get("indexers")
         .and_then(serde_json::Value::as_array)
@@ -201,7 +186,6 @@ pub fn apply(stored: &mut StoredSettings, incoming: &serde_json::Value) {
     if let Some(value) = text("news_user") {
         stored.news_user = value
     }
-    // a blank password field means "leave it as it is", so saving cannot silently erase one
     if let Some(value) = text("news_password").filter(|value| !value.is_empty()) {
         stored.news_password = value;
     }
@@ -225,6 +209,15 @@ pub fn apply(stored: &mut StoredSettings, incoming: &serde_json::Value) {
     }
     if let Some(value) = text("language") {
         stored.language = value;
+    }
+    if let Some(value) = text("subtitles_language").filter(|value| !value.is_empty()) {
+        stored.subtitles_language = value;
+    }
+    if let Some(value) = text("tmdb_language").filter(|value| !value.is_empty()) {
+        stored.tmdb_language = value;
+    }
+    if let Some(value) = text("ui_language") {
+        stored.ui_language = value;
     }
     if let Some(port) = number("news_port") {
         stored.news_port = port as u16;
@@ -257,13 +250,9 @@ pub fn write(
     stored: &StoredSettings,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let path = path(handle)?;
-    // half-understanding a newer file and then writing over it would destroy it
     if let Ok(existing) = std::fs::read(&path) {
         if newer_than_app(&existing) {
-            return Err(
-                "Los ajustes son de una versión más nueva de la aplicación. Hay que actualizarla."
-                    .into(),
-            );
+            return Err(ui_language_of(stored).settings_from_a_newer_app().into());
         }
     }
     std::fs::write(&path, rendered(stored)?)?;
@@ -271,7 +260,6 @@ pub fn write(
     Ok(())
 }
 
-/// What actually lands on disk: always stamped with the version that wrote it.
 pub fn rendered(stored: &StoredSettings) -> Result<Vec<u8>, serde_json::Error> {
     let stamped = StoredSettings {
         version: SETTINGS_VERSION,
@@ -280,7 +268,6 @@ pub fn rendered(stored: &StoredSettings) -> Result<Vec<u8>, serde_json::Error> {
     serde_json::to_vec_pretty(&stamped)
 }
 
-/// The file holds two passwords, so it is readable by its owner and nobody else.
 #[cfg(unix)]
 fn restrict(path: &std::path::Path) {
     use std::os::unix::fs::PermissionsExt;
@@ -296,7 +283,47 @@ pub fn load(handle: &AppHandle) -> Result<Settings, Box<dyn std::error::Error>> 
         &stored,
         default_destination(handle),
         handle.path().app_data_dir()?,
+        &system_language().0,
     ))
+}
+
+pub fn system_language() -> (String, String) {
+    locale_of_this_computer()
+        .as_deref()
+        .and_then(language_from_locale)
+        .unwrap_or_else(|| ("es".into(), "es-ES".into()))
+}
+
+#[cfg(unix)]
+fn locale_of_this_computer() -> Option<String> {
+    ["LC_ALL", "LC_MESSAGES", "LANG"]
+        .iter()
+        .find_map(|name| std::env::var(name).ok().filter(|value| !value.is_empty()))
+}
+
+#[cfg(windows)]
+fn locale_of_this_computer() -> Option<String> {
+    use windows_sys::Win32::Globalization::{GetUserDefaultLocaleName, LOCALE_NAME_MAX_LENGTH};
+    let mut buffer = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
+    let written = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
+    if written <= 1 {
+        return None;
+    }
+    String::from_utf16(&buffer[..written as usize - 1]).ok()
+}
+
+fn language_from_locale(locale: &str) -> Option<(String, String)> {
+    let base = locale.split('.').next()?.trim().replace('_', "-");
+    let mut parts = base.split('-');
+    let code = parts.next()?.to_lowercase();
+    if code.len() != 2 || !code.chars().all(|letter| letter.is_ascii_alphabetic()) {
+        return None;
+    }
+    let locale = match parts.next().map(str::to_uppercase) {
+        Some(region) if region.len() == 2 => format!("{code}-{region}"),
+        _ => code.clone(),
+    };
+    Some((code, locale))
 }
 
 fn default_destination(handle: &AppHandle) -> PathBuf {
@@ -307,8 +334,12 @@ fn default_destination(handle: &AppHandle) -> PathBuf {
         .join("Mama Cine")
 }
 
-/// Stored fields into the value the rest of the app runs on. Pure, so the defaults are testable.
-pub fn assemble(stored: &StoredSettings, fallback_films: PathBuf, state: PathBuf) -> Settings {
+pub fn assemble(
+    stored: &StoredSettings,
+    fallback_films: PathBuf,
+    state: PathBuf,
+    fallback_language: &str,
+) -> Settings {
     Settings {
         indexers: stored
             .indexers
@@ -326,7 +357,7 @@ pub fn assemble(stored: &StoredSettings, fallback_films: PathBuf, state: PathBuf
             user_agent: non_empty(&stored.subtitles_agent, "mamacine v1.0"),
             username: stored.subtitles_user.clone(),
             password: stored.subtitles_password.clone(),
-            language: "es".into(),
+            language: non_empty(&stored.subtitles_language, fallback_language),
             api_base: None,
         },
         state,
@@ -354,11 +385,29 @@ pub fn news_of(stored: &StoredSettings) -> NewsServer {
     }
 }
 
+pub fn tmdb_language_of(stored: &StoredSettings, fallback: &str) -> String {
+    non_empty(&stored.tmdb_language, fallback)
+}
+
+/// Which language the interface speaks: the setting, else the computer's, else English,
+/// except that an unset language on a Spanish computer stays Spanish.
+pub fn ui_language_of(stored: &StoredSettings) -> crate::text::Lang {
+    resolve_ui_language(&stored.ui_language, &system_language().0)
+}
+
+fn resolve_ui_language(setting: &str, system_code: &str) -> crate::text::Lang {
+    crate::text::Lang::from_code(setting)
+        .or_else(|| crate::text::Lang::from_code(system_code))
+        .unwrap_or(crate::text::Lang::En)
+}
+
 pub fn preference_of(stored: &StoredSettings) -> mamacine_core::release::Preference {
     match stored.language.as_str() {
-        "es" => mamacine_core::release::Preference::Spanish,
         "original" => mamacine_core::release::Preference::Original,
-        _ => mamacine_core::release::Preference::Any,
+        "any" => mamacine_core::release::Preference::Any,
+        code => mamacine_core::release::known_language(code)
+            .map(mamacine_core::release::Preference::Language)
+            .unwrap_or(mamacine_core::release::Preference::Any),
     }
 }
 
@@ -370,7 +419,6 @@ fn non_empty(value: &str, fallback: &str) -> String {
     }
 }
 
-/// On Windows these travel with the app; in development they come from the shell.
 pub fn tools(handle: &AppHandle) -> Tools {
     let places: Vec<PathBuf> = [
         handle.path().resource_dir().ok(),
@@ -388,10 +436,6 @@ pub fn tools(handle: &AppHandle) -> Tools {
     }
 }
 
-/// The name a bundled program is filed under is the name plus this platform's suffix, and looking
-/// for it without one found nothing on Windows: every tool fell back to a bare name, which only
-/// ever worked because Windows happens to search the folder the app is running from. What that
-/// hid is that a missing tool looked exactly like a present one.
 fn beside_the_app(places: &[PathBuf], name: &str) -> PathBuf {
     let filename = format!("{name}{}", std::env::consts::EXE_SUFFIX);
     places
@@ -399,23 +443,13 @@ fn beside_the_app(places: &[PathBuf], name: &str) -> PathBuf {
         .map(|directory| directory.join(&filename))
         .find(|path| path.exists())
         .map(as_windows_writes_it)
-        // in development they come from the shell, and PATH is the right place to look
         .unwrap_or_else(|| PathBuf::from(name))
 }
 
-/// The drive letter spelled plainly, never `\\?\C:\...`.
-///
-/// Tauri answers with the verbatim form, and the verbatim form is a trap rather than a nicety:
-/// these paths are written into nzbget's config, and nzbget puts `\\?\` in front of any path it
-/// judges too long for the old limit. Given one that already carries the prefix it reads the two
-/// leading backslashes as a network share and builds `\\?\UNC\?\C:\...`, which names nothing.
-/// Her paths are short enough today that it does not fire, and that is the whole danger of it.
 fn as_windows_writes_it(path: PathBuf) -> PathBuf {
     let Some(rest) = path.to_str().and_then(|text| text.strip_prefix(r"\\?\")) else {
         return path;
     };
-    // a verbatim share is `\\?\UNC\server\share`, and dropping the prefix off one of those
-    // leaves behind something that is not a path at all
     let letters = rest.as_bytes();
     let names_a_drive = letters.len() >= 3
         && letters[0].is_ascii_alphabetic()
@@ -447,9 +481,6 @@ mod tests {
         );
     }
 
-    // These go into nzbget's config, and nzbget lengthens a path it thinks is too long by
-    // putting `\\?\` in front of it. Handed one that already has the prefix it reads the two
-    // backslashes as a machine name on the network.
     #[test]
     fn a_drive_letter_is_written_the_way_the_rest_of_windows_writes_it() {
         assert_eq!(
@@ -481,8 +512,6 @@ mod tests {
         );
     }
 
-    // The window's input fields produce strings, serde's as_u64 answers None for a string, and
-    // for weeks editing the port silently did nothing. Every numeric field must take both.
     #[test]
     fn a_port_typed_into_a_text_field_still_counts() {
         let mut stored = StoredSettings::default();
@@ -536,8 +565,80 @@ mod tests {
         apply(&mut stored, &serde_json::json!({ "language": "es" }));
         assert!(matches!(
             preference_of(&stored),
-            mamacine_core::release::Preference::Spanish
+            mamacine_core::release::Preference::Language("es")
         ));
+        apply(&mut stored, &serde_json::json!({ "language": "fr" }));
+        assert!(matches!(
+            preference_of(&stored),
+            mamacine_core::release::Preference::Language("fr")
+        ));
+        apply(&mut stored, &serde_json::json!({ "language": "xx" }));
+        assert!(
+            matches!(
+                preference_of(&stored),
+                mamacine_core::release::Preference::Any
+            ),
+            "a code nobody recognises falls back to the setting that works everywhere"
+        );
+    }
+
+    #[test]
+    fn the_fetched_languages_follow_the_computer_until_somebody_chooses() {
+        let stored = StoredSettings::default();
+        let settings = assemble(&stored, PathBuf::from("."), PathBuf::from("."), "de");
+        assert_eq!(settings.subtitles.language, "de");
+        assert_eq!(tmdb_language_of(&stored, "de-DE"), "de-DE");
+
+        let mut stored = StoredSettings::default();
+        apply(
+            &mut stored,
+            &serde_json::json!({ "subtitles_language": "fr", "tmdb_language": "fr-FR" }),
+        );
+        let settings = assemble(&stored, PathBuf::from("."), PathBuf::from("."), "de");
+        assert_eq!(settings.subtitles.language, "fr");
+        assert_eq!(tmdb_language_of(&stored, "de-DE"), "fr-FR");
+    }
+
+    #[test]
+    fn a_settings_file_from_before_the_language_fields_follows_the_computer_too() {
+        let stored: StoredSettings =
+            serde_json::from_str(r#"{"version": 2, "news_host": "news.test"}"#).expect("readable");
+        let settings = assemble(&stored, PathBuf::from("."), PathBuf::from("."), "es");
+        assert_eq!(settings.subtitles.language, "es");
+    }
+
+    #[test]
+    fn the_interface_language_follows_the_setting_then_the_computer_then_english() {
+        use crate::text::Lang;
+        assert_eq!(resolve_ui_language("", "es"), Lang::Es);
+        assert_eq!(resolve_ui_language("", "en"), Lang::En);
+        assert_eq!(
+            resolve_ui_language("", "fr"),
+            Lang::En,
+            "unsupported computers read English"
+        );
+        assert_eq!(
+            resolve_ui_language("es", "fr"),
+            Lang::Es,
+            "the setting wins"
+        );
+        assert_eq!(resolve_ui_language("en", "es"), Lang::En);
+    }
+
+    #[test]
+    fn a_locale_is_read_in_the_spellings_computers_actually_use() {
+        assert_eq!(
+            language_from_locale("es_ES.UTF-8"),
+            Some(("es".into(), "es-ES".into()))
+        );
+        assert_eq!(
+            language_from_locale("fr-FR"),
+            Some(("fr".into(), "fr-FR".into()))
+        );
+        assert_eq!(language_from_locale("de"), Some(("de".into(), "de".into())));
+        assert_eq!(language_from_locale("C"), None, "no language named");
+        assert_eq!(language_from_locale("POSIX"), None);
+        assert_eq!(language_from_locale(""), None);
     }
 
     #[test]
@@ -549,8 +650,6 @@ mod tests {
         assert!(!news_of(&stored).encrypted);
     }
 
-    // The app will be updated again: what it writes says which version wrote it, and a file
-    // from a newer version is recognised so nothing ever half-reads it and writes it back.
     #[test]
     fn what_is_written_is_stamped_and_a_newer_file_is_recognised() {
         let rendered = rendered(&StoredSettings::default()).expect("serializable");
@@ -568,8 +667,6 @@ mod tests {
         assert!(!newer_than_app(b"garbage"));
     }
 
-    // A download she started must not die because she tidied the window away: keeping going is
-    // the default, and both switches travel through the same tolerant apply as everything else.
     #[test]
     fn the_tray_and_autostart_switches_are_stored_and_default_sensibly() {
         let stored = StoredSettings::default();

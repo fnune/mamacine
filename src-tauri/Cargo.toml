@@ -3,6 +3,7 @@ name = "mamacine"
 description = "Mamá Cine"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [lib]
 name = "mamacine_lib"
@@ -14,8 +15,6 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 mamacine-core = { path = "../core" }
 tauri = { version = "2", features = ["tray-icon", "image-png"] }
-# The portal backend rather than the GTK one, so the desktop's own file chooser appears instead of
-# GNOME's on a KDE session. On Windows this makes no difference: the native dialog is used regardless.
 tauri-plugin-dialog = { version = "2", default-features = false, features = ["xdg-portal"] }
 tauri-plugin-notification = "2"
 tauri-plugin-autostart = "2"
@@ -23,11 +22,10 @@ tauri-plugin-single-instance = "2"
 serde = { workspace = true }
 serde_json = { workspace = true }
 getrandom = "0.3"
-# the recycle bin rather than deletion, so a mistaken tap on Quitar is recoverable
 trash = "5"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_System_Threading", "Win32_Foundation", "Win32_Globalization"] }

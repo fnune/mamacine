@@ -1,8 +1,4 @@
-//! The Movie Database, used for suggestions when a key is configured.
-//!
-//! It is the one source that serves titles in her language and states `original_title` outright,
-//! so it is the only provider allowed to put an original in parentheses: a guessed original is a
-//! wrong name waiting to happen. Without a key the app falls back to the keyless IMDb lookup.
+//! TMDB suggestions, when a key is configured.
 
 use crate::error::{Error, Result};
 use crate::http::{expect_success, HttpClient, Request};
@@ -16,7 +12,6 @@ const SUGGESTION_LIMIT: usize = 8;
 
 pub struct Tmdb<H> {
     key: String,
-    /// The language the interface speaks, e.g. "es-ES". Titles come back localized to it.
     language: String,
     http: H,
     api_base: String,
@@ -77,16 +72,10 @@ impl<H: HttpClient> Tmdb<H> {
         Ok(parse_suggestions(&answer))
     }
 
-    /// A picked suggestion becomes the query the indexer can answer. Releases are filed under a
-    /// film's IMDb id and a show's international name, neither of which the search result carries,
-    /// so picking costs one more lookup.
+    /// Picking costs one more lookup.
     pub fn resolve(&self, suggestion: &Suggestion) -> Result<Picked> {
-        // her own language, and only that: the original belongs beside it in the list she chooses
-        // from, where it tells two titles apart, and nowhere else
         let title = suggestion.title.clone();
         if suggestion.series {
-            // the indexer files a show under its tvdb id and its packs under an international
-            // name; both come back in one answer, and neither is in the suggestion
             let answer = self.json(&format!(
                 "/tv/{}?language=en-US&append_to_response=external_ids",
                 suggestion.id
@@ -109,7 +98,6 @@ impl<H: HttpClient> Tmdb<H> {
             .filter(|id| !id.is_empty())
         {
             Some(imdb) => imdb.to_string(),
-            // no id registered: the international name is the next most searchable thing
             None => self
                 .json(&format!("/movie/{}?language=en-US", suggestion.id))?
                 .get("title")
@@ -125,10 +113,7 @@ impl<H: HttpClient> Tmdb<H> {
         })
     }
 
-    /// The episodes of a season, named in her language. A run of several seasons is answered with
-    /// how many episodes each of them has, from the show's own entry, rather than with one request
-    /// per season: the number is what a five-season pack has to say, and fifty names are not a
-    /// screen she can read.
+    /// Episode names; a run answers with counts.
     pub fn episodes(&self, tmdb: &str, first: u32, last: u32) -> Result<Vec<Episode>> {
         if first != last {
             let answer = self.json(&format!("/tv/{}", encode_component(tmdb)))?;
@@ -142,8 +127,7 @@ impl<H: HttpClient> Tmdb<H> {
         Ok(parse_episodes(&answer))
     }
 
-    /// The show a name means, for a season she already owns whose search is long gone. Two
-    /// questions, because a search result states no ids: which show, then which ids it has.
+    /// The show a name means, with ids.
     pub fn show_named(&self, name: &str) -> Result<ShowIds> {
         let answer = self.json(&format!(
             "/search/tv?query={}&language={}",
@@ -159,8 +143,7 @@ impl<H: HttpClient> Tmdb<H> {
         Ok(parse_show_ids(&full))
     }
 
-    /// What the film is about, in her language, found under the film's IMDb id. `None` when the
-    /// database has nothing to say, which is an answer and not an error.
+    /// `None` is an answer, not an error.
     pub fn synopsis(&self, imdb_id: &str) -> Result<Option<String>> {
         let answer = self.json(&format!(
             "/find/{}?external_source=imdb_id&language={}",
@@ -170,13 +153,12 @@ impl<H: HttpClient> Tmdb<H> {
         Ok(parse_synopsis(&answer))
     }
 
-    /// Validates the key from the settings screen, on the endpoint that costs nothing.
+    /// Validates the key on the free endpoint.
     pub fn check(&self) -> Result<()> {
         self.json("/configuration").map(|_| ())
     }
 
     pub fn poster(&self, url: &str) -> Result<(String, Vec<u8>)> {
-        // fetched here rather than by the page, so only TMDB's own image host is ever contacted
         if !url.starts_with("https://image.tmdb.org/") {
             return Err(Error::Setup(
                 "posters must come from TMDB's image host".into(),
@@ -188,9 +170,7 @@ impl<H: HttpClient> Tmdb<H> {
     }
 }
 
-/// TMDB offers two credentials on the same page: the v3 key, which travels in the query, and the
-/// v4 read access token, a JWT that is only accepted as a bearer header and answers 401 in the
-/// query. She pastes whichever one she found, so what she pasted decides how it is sent.
+/// What was pasted decides how it travels.
 pub fn is_read_token(key: &str) -> bool {
     let key = key.trim();
     key.starts_with("eyJ") && key.contains('.')
@@ -238,8 +218,7 @@ pub fn parse_episodes(answer: &Value) -> Vec<Episode> {
         .collect()
 }
 
-/// How many episodes each season has, from the show's own entry: enough to say how much television
-/// a pack of several seasons is, and it states no name it was not told.
+/// Episode counts per season, no invented names.
 pub fn parse_season_lengths(answer: &Value, first: u32, last: u32) -> Vec<Episode> {
     let Some(seasons) = answer.get("seasons").and_then(Value::as_array) else {
         return Vec::new();
@@ -262,14 +241,7 @@ pub fn parse_season_lengths(answer: &Value, first: u32, last: u32) -> Vec<Episod
         .collect()
 }
 
-/// The ids a show is filed under at the indexer, out of `external_ids`.
-/// Which of the shows the database offers is the one on her card.
-///
-/// Its own order is not the answer: searching "gomorrah" puts a collection nobody has heard of
-/// (popularity 0.5) above Gomorra itself (popularity 25), because the collection's name matches
-/// the letters more exactly. So the name is a filter and not a ranking: a show whose name or
-/// original name does not contain every word she has is a different show and is dropped, and of
-/// those that survive, the most watched one is what a name on its own means.
+/// The name filters; popularity decides.
 pub fn best_show(answer: &Value, name: &str) -> Option<String> {
     let results = answer.get("results").and_then(Value::as_array)?;
     results
@@ -324,7 +296,7 @@ pub fn parse_suggestions(answer: &Value) -> Vec<Suggestion> {
             let series = match item.get("media_type").and_then(Value::as_str)? {
                 "movie" => false,
                 "tv" => true,
-                _ => return None, // people are not downloadable
+                _ => return None,
             };
             let text = |field: &str| {
                 item.get(field)
@@ -338,10 +310,8 @@ pub fn parse_suggestions(answer: &Value) -> Vec<Suggestion> {
             } else {
                 text("original_title")
             }
-            // the parentheses appear only when the original is genuinely another name
             .filter(|original| fold(original).to_lowercase() != fold(&title).to_lowercase())
             .filter(|original| crate::lookup::readable(original));
-            // an unreleased title has nothing on usenet to satisfy it
             let year = if series {
                 text("first_air_date")
             } else {
@@ -437,8 +407,6 @@ mod tests {
         assert!(url.contains("include_adult=false"), "{url}");
     }
 
-    // The page she copies from offers two credentials, and the long one is refused outright as a
-    // query parameter: sending it the wrong way is a key that looks configured and works nowhere.
     #[test]
     fn a_read_access_token_travels_as_a_bearer_header_and_never_in_the_query() {
         let token = "eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJtYW1hY2luZSJ9.firma";
@@ -478,9 +446,6 @@ mod tests {
         assert!(!is_read_token(""));
     }
 
-    // Real answer, trimmed: TMDB's own order puts a collection with a popularity of 0.5 above the
-    // show with a popularity of 25, because its name matches the letters more exactly. Naming her
-    // episodes from that one would put another programme's names on her season.
     #[test]
     fn the_show_a_name_means_is_the_watched_one_and_not_the_closest_spelling() {
         let answer = serde_json::json!({"results": [
@@ -494,8 +459,6 @@ mod tests {
         assert_eq!(best_show(&answer, "gomorrah").as_deref(), Some("61068"));
     }
 
-    // The card says what the release said; the database answers in her language. The original
-    // name is what the two have in common, and a show that matches neither is not hers.
     #[test]
     fn a_show_named_in_her_language_is_found_by_the_original_name_beside_it() {
         let answer = serde_json::json!({"results": [
@@ -552,9 +515,6 @@ mod tests {
         }
     }
 
-    // The indexer files releases under the IMDb id; TMDB's search result does not carry it, so
-    // picking costs one more lookup. The name that comes back is hers alone: the original beside
-    // it belongs in the list she chooses from, where it tells two titles apart.
     #[test]
     fn a_picked_film_is_searched_by_its_imdb_id_and_named_in_her_language() {
         let service = service(vec![FakeHttp::status(
@@ -584,8 +544,6 @@ mod tests {
         assert_eq!(picked.query, "The Platform");
     }
 
-    // The indexer files the show under its tvdb id, and the packs under an international name for
-    // the indexers that have no id for it: "La casa de papel" alone finds neither.
     #[test]
     fn a_picked_series_carries_the_ids_and_the_name_an_indexer_answers_to() {
         let service = service(vec![FakeHttp::status(
@@ -642,8 +600,6 @@ mod tests {
         assert!(url.contains("language=es-ES"), "{url}");
     }
 
-    // Fifty names are not a screen she can read, and five requests are not a screen worth paying
-    // for: a pack of several seasons is answered with how much television it is.
     #[test]
     fn a_pack_of_several_seasons_counts_them_in_one_question() {
         let service = service(vec![FakeHttp::status(

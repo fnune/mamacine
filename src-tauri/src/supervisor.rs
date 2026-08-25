@@ -1,6 +1,5 @@
-//! Starting and stopping the private nzbget instance that does the downloading.
-
 use crate::log::Log;
+use crate::text::Lang;
 use mamacine_core::error::{Error, Result};
 use mamacine_core::http::HttpClient;
 use mamacine_core::nzbget::{render_config, NzbgetRpc, Tools};
@@ -12,12 +11,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-/// What she is told when the downloader will not run. The reason itself is technical every time,
-/// so it goes to the log, and the sentence says where the log is rather than pretending to
-/// explain: the person who can act on it is whoever set the app up.
-const IN_THE_LOG: &str = "En Ajustes, «Abrir el registro» dice por qué.";
-
-/// Never written in full on the command line. See where it is passed.
 const CONFIG_NAME: &str = "nzbget.conf";
 
 pub struct Nzbget {
@@ -28,12 +21,12 @@ pub struct Nzbget {
 }
 
 impl Nzbget {
-    /// Writes a config only this instance uses, on a port only this instance knows.
     pub fn start<H: HttpClient>(
         settings: &Settings,
         tools: &Tools,
         http: &H,
         log: &Arc<Log>,
+        lang: Lang,
     ) -> Result<Nzbget> {
         let work = settings.state.join("nzbget");
         for directory in ["inter", "nzb", "queue", "tmp", "scripts"] {
@@ -41,8 +34,6 @@ impl Nzbget {
         }
         std::fs::create_dir_all(&settings.destination)?;
 
-        // an app that crashed or was killed leaves its private nzbget running, downloading
-        // unseen: the app being off must mean nothing is going on
         let pidfile = work.join("nzbget.pid");
         reclaim_orphan(&pidfile);
 
@@ -69,11 +60,6 @@ impl Nzbget {
             tools.sevenzip.exists()
         ));
 
-        // named from inside its own folder rather than in full: nzbget takes the `-c` argument
-        // from the C runtime, which spells it in the machine's code page, and then reads it as
-        // UTF-8. A bare `nzbget.conf` has nothing in it that the two spellings disagree about,
-        // and nzbget expands it against this directory through the wide interface, which does
-        // carry the accents.
         let mut command = Command::new(&program);
         command
             .current_dir(&work)
@@ -89,9 +75,7 @@ impl Nzbget {
                 "nzbget could not be started ({}): {failure}",
                 program.display()
             ));
-            Error::Setup(format!(
-                "No he podido arrancar el descargador. {IN_THE_LOG}"
-            ))
+            Error::Setup(lang.downloader_would_not_start())
         })?;
 
         let ready = Arc::new(AtomicBool::new(false));
@@ -116,17 +100,11 @@ impl Nzbget {
                 return Ok(started);
             }
             match started.ended() {
-                // an nzbget that refuses its own configuration is gone in a second: waiting out
-                // the deadline to then blame the clock describes the wait, not the failure
                 Some(status) if !status.success() => {
                     log.line(&format!("nzbget refused to run ({status})"));
                     report_own_log(&work, log);
-                    return Err(Error::Setup(format!(
-                        "El descargador se ha cerrado nada más arrancar. {IN_THE_LOG}"
-                    )));
+                    return Err(Error::Setup(lang.downloader_closed_at_once()));
                 }
-                // leaving with nothing to complain about can mean it put a server behind it, so
-                // the answer is still worth waiting for
                 Some(status) if !ended => {
                     ended = true;
                     log.line(&format!(
@@ -139,9 +117,7 @@ impl Nzbget {
         }
         log.line("nzbget was still not answering after 25 seconds");
         report_own_log(&work, log);
-        Err(Error::Setup(format!(
-            "El descargador no ha arrancado. {IN_THE_LOG}"
-        )))
+        Err(Error::Setup(lang.downloader_never_answered()))
     }
 
     fn ended(&mut self) -> Option<std::process::ExitStatus> {
@@ -152,8 +128,6 @@ impl Nzbget {
         let rpc = NzbgetRpc::new(self.port, &self.password, http);
         let _ = rpc.shutdown();
         if let Some(mut process) = self.process.take() {
-            // two seconds of grace, not ten: this runs while the window is closing, and a quit
-            // that visibly hangs reads as a crash
             for _ in 0..10 {
                 match process.try_wait() {
                     Ok(Some(_)) => return,
@@ -167,12 +141,6 @@ impl Nzbget {
     }
 }
 
-/// What nzbget wrote to its own log before it stopped, into ours.
-///
-/// A program that dies by abort() takes its unflushed output with it, and output to a pipe is
-/// buffered where output to a console is not: that is exactly the run whose reason is worth
-/// having, and piping it is what loses it. Its log file is written by nzbget itself, so it
-/// survives what the pipe does not.
 fn report_own_log(work: &std::path::Path, log: &Arc<Log>) {
     let path = work.join("nzbget.log");
     let Ok(text) = std::fs::read_to_string(&path) else {
@@ -195,13 +163,6 @@ fn last_lines(text: &str, wanted: usize) -> Vec<&str> {
     lines[lines.len().saturating_sub(wanted)..].to_vec()
 }
 
-/// nzbget's console output, into our log, on a thread of its own: a pipe nobody reads fills up
-/// and stops the program writing to it.
-///
-/// Everything it says until it answers, because that is where a refusal to start is printed and
-/// nowhere else: its own log file is not open yet. Only trouble after that, because it narrates
-/// every download, and a megabyte of narration would rotate away the app's own history to say
-/// what its log file already says.
 fn forward(
     stream: Option<impl std::io::Read + Send + 'static>,
     log: &Arc<Log>,
@@ -228,11 +189,9 @@ fn is_trouble(line: &str) -> bool {
     line.contains("ERROR") || line.contains("WARNING") || line.contains("FATAL")
 }
 
-/// Kills the nzbget a crashed instance left behind, and only that: the pid is checked to still
-/// belong to an nzbget before anything is sent a signal, because pids get reused.
 fn reclaim_orphan(pidfile: &std::path::Path) {
     let Ok(text) = std::fs::read_to_string(pidfile) else {
-        return; // a clean shutdown removed it
+        return;
     };
     if let Ok(pid) = text.trim().parse::<u32>() {
         if is_an_nzbget(pid) {
@@ -251,7 +210,6 @@ fn is_an_nzbget(pid: u32) -> bool {
 
 #[cfg(unix)]
 fn terminate(pid: u32) {
-    // SAFETY: plain signals to a pid just verified to be an nzbget of ours
     unsafe { libc::kill(pid as i32, libc::SIGTERM) };
     std::thread::sleep(Duration::from_millis(500));
     unsafe { libc::kill(pid as i32, libc::SIGKILL) };
@@ -263,7 +221,6 @@ fn is_an_nzbget(pid: u32) -> bool {
     use windows_sys::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
     };
-    // SAFETY: a query-only handle, closed on every path
     unsafe {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
@@ -284,7 +241,6 @@ fn is_an_nzbget(pid: u32) -> bool {
 fn terminate(pid: u32) {
     use windows_sys::Win32::Foundation::CloseHandle;
     use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, PROCESS_TERMINATE};
-    // SAFETY: a terminate-only handle for a pid just verified to be an nzbget, closed after
     unsafe {
         let handle = OpenProcess(PROCESS_TERMINATE, 0, pid);
         if !handle.is_null() {
@@ -294,10 +250,6 @@ fn terminate(pid: u32) {
     }
 }
 
-/// Windows gives a console program a console, and nzbget is a console program: a black window
-/// stood beside the app with nothing in it she could act on, and its close button was a close
-/// button for the downloader. Everything it prints is read off the pipes either way, so the
-/// console was never showing anything the log does not already have.
 #[cfg(windows)]
 fn off_the_screen(command: &mut Command) {
     use std::os::windows::process::CommandExt;
@@ -308,16 +260,6 @@ fn off_the_screen(command: &mut Command) {
 #[cfg(not(windows))]
 fn off_the_screen(_command: &mut Command) {}
 
-/// A spelling of nzbget that nzbget itself can read.
-///
-/// On Windows it asks the system for its own file name through the narrow interface, which
-/// answers in the machine's code page, and then reads that answer as UTF-8. Under a profile
-/// named «María Esther» the í comes back as a single byte, UTF-8 reads that byte as the start
-/// of a three-letter sequence that is not there, the conversion throws, nothing catches it, and
-/// the process aborts with 0xC0000409. All of that happens before it opens its own log, which
-/// is why every failed start left nothing behind to read. Only what is inside the config file
-/// is safe, because that it reads as UTF-8 from the first byte: the destination and the working
-/// folders keep her name.
 fn spelled_without_accents(nzbget: &std::path::Path, log: &Arc<Log>) -> std::path::PathBuf {
     if !cfg!(windows) || is_plain_ascii(nzbget) {
         return nzbget.to_path_buf();
@@ -340,8 +282,6 @@ fn spelled_without_accents(nzbget: &std::path::Path, log: &Arc<Log>) -> std::pat
             log.line(&format!("nzbget copied to {}", copy.display()));
             copy
         }
-        // the one already there is a copy of the one we were about to write, and a start that
-        // works is worth more than a copy that is certainly of today's build
         Err(failure) if copy.exists() => {
             log.line(&format!(
                 "keeping the nzbget already in {} ({failure})",
@@ -360,8 +300,6 @@ fn spelled_without_accents(nzbget: &std::path::Path, log: &Arc<Log>) -> std::pat
     }
 }
 
-/// Nothing that is hers goes here: the config file carries her news password and stays in her
-/// own folder, under her own account. Only the program is copied, and a program is public.
 fn a_folder_nobody_is_named_in() -> std::path::PathBuf {
     std::env::var_os("ProgramData")
         .map(std::path::PathBuf::from)
@@ -374,8 +312,6 @@ fn is_plain_ascii(path: &std::path::Path) -> bool {
     path.as_os_str().to_str().is_some_and(str::is_ascii)
 }
 
-/// Windows copies the modification time along with the file, so the nzbget an app update has
-/// since replaced does not answer to this and is copied again.
 fn is_the_same_program(copy: &std::path::Path, source: &std::path::Path) -> bool {
     match (copy.metadata(), source.metadata()) {
         (Ok(there), Ok(here)) => {
@@ -413,8 +349,6 @@ fn write_private(path: &std::path::Path, contents: &[u8]) -> Result<()> {
 mod tests {
     use super::*;
 
-    // Pids get reused: a stale pidfile must never kill whatever innocent process holds the
-    // number now. This test IS that innocent process.
     #[test]
     fn a_reused_pid_that_is_not_an_nzbget_is_left_alive() {
         let directory = std::env::temp_dir().join("mama-cine-orphan-test");
@@ -425,12 +359,9 @@ mod tests {
 
         reclaim_orphan(&pidfile);
 
-        // still running, which is the point
         assert!(!pidfile.exists(), "the stale pidfile is cleaned up");
     }
 
-    // nzbget narrates every download at INFO. Forwarding all of it into a log that rotates at a
-    // megabyte would push out the app's own history to duplicate what nzbget's log already has.
     #[test]
     fn only_what_went_wrong_is_kept_once_nzbget_is_running() {
         assert!(is_trouble(
@@ -456,10 +387,6 @@ mod tests {
         assert!(last_lines("", 10).is_empty());
     }
 
-    // Her Windows profile is «María Esther», and every start ended in an nzbget that aborted
-    // with 0xC0000409 before it could write a word about why. The í is the whole reason: nzbget
-    // reads its own file name back from the system in the machine's code page and then decodes
-    // it as UTF-8, and the two disagree about that one letter.
     #[test]
     fn a_program_reached_through_a_name_with_an_accent_in_it_is_a_program_that_aborts() {
         assert!(!is_plain_ascii(std::path::Path::new(
@@ -475,7 +402,6 @@ mod tests {
         );
     }
 
-    // Copying ten megabytes on every start would be a start she waits through.
     #[test]
     fn the_copy_is_made_once_and_then_recognised() {
         let directory = std::env::temp_dir().join("mama-cine-copy-test");
@@ -487,9 +413,6 @@ mod tests {
 
         assert!(!is_the_same_program(&copy, &source));
         std::fs::copy(&source, &copy).expect("a copy");
-        // Windows carries the modification time across on its own; here it is done by hand, so
-        // that the test says what a copy on her machine looks like rather than what one looks
-        // like on the machine this is written on.
         let when = source
             .metadata()
             .expect("a program")
@@ -510,8 +433,6 @@ mod tests {
         );
     }
 
-    // Only Windows cannot read its own name. Nothing is copied anywhere else, and the paths
-    // there are left exactly as they were found.
     #[test]
     fn nothing_is_moved_on_a_system_that_can_read_the_name_it_was_given() {
         if cfg!(windows) {
@@ -539,7 +460,6 @@ mod tests {
 
 #[cfg(not(unix))]
 fn write_private(path: &std::path::Path, contents: &[u8]) -> Result<()> {
-    // the file carries the news server password; on Windows it inherits the user's profile acl
     let mut file = std::fs::File::create(path)?;
     file.write_all(contents)?;
     Ok(())

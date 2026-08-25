@@ -1,6 +1,4 @@
-//! Reading a par2 index file's table of contents: which files the repair set can actually
-//! repair. The Joy season died with all its repair data present, because the damage sat in
-//! files the set does not cover — a fact this small file states outright, before any download.
+//! What a par2 set can actually repair.
 
 /// What one par2 index promises to protect.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -12,15 +10,12 @@ pub struct Protection {
 
 const MAGIC: &[u8; 8] = b"PAR2\0PKT";
 
-/// Whether these bytes are par2 at all. Posts disguise data as ".par2" to dodge scanners — the
-/// Joy season shipped ten such fakes, nzbget found "nothing to par-check", and any damage was
-/// fatal. One fetched article answers this before a byte of the release is downloaded.
+/// Whether these bytes are par2 at all.
 pub fn contains_packets(bytes: &[u8]) -> bool {
     bytes.windows(MAGIC.len()).any(|window| window == MAGIC)
 }
 
-/// Reads whatever packets are present; a truncated tail packet is simply ignored, because the
-/// caller may only hold the first article of the file.
+/// A truncated tail packet is ignored.
 pub fn read(bytes: &[u8]) -> Option<Protection> {
     let mut protection = Protection::default();
     let mut at = 0usize;
@@ -45,7 +40,6 @@ pub fn read(bytes: &[u8]) -> Option<Protection> {
             found = true;
         }
         if packet_type.starts_with(b"PAR 2.0\0FileDesc") && whole && body.len() > 56 {
-            // file id, two hashes and a length come first; the name fills the rest, padded
             let name: Vec<u8> = body[56..]
                 .iter()
                 .copied()
@@ -69,8 +63,8 @@ mod tests {
         let length = 64 + body.len();
         let mut out = MAGIC.to_vec();
         out.extend((length as u64).to_le_bytes());
-        out.extend([0u8; 16]); // packet hash, unchecked: this is evidence, not verification
-        out.extend([0u8; 16]); // set id
+        out.extend([0u8; 16]);
+        out.extend([0u8; 16]);
         let mut named = [0u8; 16];
         named[..kind.len()].copy_from_slice(kind);
         out.extend(named);
@@ -81,7 +75,7 @@ mod tests {
     fn file_desc(name: &str) -> Vec<u8> {
         let mut body = vec![0u8; 56];
         body.extend(name.as_bytes());
-        body.extend([0u8; 4]); // par2 pads names to multiples of four
+        body.extend([0u8; 4]);
         packet(b"PAR 2.0\0FileDesc", &body)
     }
 
@@ -103,7 +97,7 @@ mod tests {
     #[test]
     fn a_truncated_tail_packet_is_ignored_rather_than_fatal() {
         let mut index = file_desc("covered.mkv");
-        index.extend(&file_desc("lost.mkv")[..70]); // the article ended mid-packet
+        index.extend(&file_desc("lost.mkv")[..70]);
         let protection = read(&index).expect("readable");
         assert_eq!(protection.covered, ["covered.mkv"]);
     }
@@ -114,13 +108,11 @@ mod tests {
         assert_eq!(read(&[]), None);
     }
 
-    // A recovery volume can open with a packet larger than the fetched article, hiding the
-    // vital packets beyond it: authenticity needs only the magic, not a whole packet.
     #[test]
     fn real_par2_is_recognised_even_when_only_a_giant_packet_head_was_fetched() {
         let mut giant = MAGIC.to_vec();
         giant.extend(2_000_000u64.to_le_bytes());
-        giant.extend([0u8; 100]); // the article ended long before the packet did
+        giant.extend([0u8; 100]);
         assert!(contains_packets(&giant));
         assert!(!contains_packets(b"data wearing a .par2 name"));
     }

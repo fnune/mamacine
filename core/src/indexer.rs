@@ -1,4 +1,4 @@
-//! Searching a newznab indexer. The parser is a pure function; the client is a thin shell over it.
+//! Searching a newznab indexer.
 
 use crate::clock::{age_days, parse_feed_date, Clock};
 use crate::error::{Error, Result};
@@ -15,8 +15,7 @@ pub struct SearchResult {
     pub size_bytes: u64,
     pub age_days: Option<f64>,
     pub grabs: u64,
-    /// The only thing the indexer publishes that hints at whether a copy is still complete. Nobody
-    /// downvotes a release that worked; there is no completeness figure to ask for.
+    /// The only completeness hint indexers publish.
     pub thumbs_up: u32,
     pub thumbs_down: u32,
     pub cover_url: Option<String>,
@@ -48,15 +47,12 @@ impl Category {
     }
 }
 
-/// The ids a show is filed under at the indexer. A name is a guess about spelling, language and
-/// which of two shows she meant; an id is the show itself, and finds it under every name it was
-/// released as: asking NZBGeek for tvdb 327417 answers with the "Money Heist" packs as well as
-/// the "La casa de papel" ones, which a search for either name alone never sees.
+/// Ids find a show under every release name.
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ShowIds {
     pub tvdb: Option<String>,
     pub tvmaze: Option<String>,
-    /// With the `tt`, the way newznab takes it.
+    /// With the `tt`, as newznab takes it.
     pub imdb: Option<String>,
     pub tmdb: Option<String>,
 }
@@ -66,7 +62,7 @@ impl ShowIds {
         self.tvdb.is_some() || self.tvmaze.is_some() || self.imdb.is_some() || self.tmdb.is_some()
     }
 
-    /// The first id this indexer says it understands, in Sonarr's order of preference.
+    /// The first id this indexer understands.
     fn parameter(&self, supported: &[String]) -> Option<(&'static str, String)> {
         let known = |name: &'static str, value: &Option<String>| {
             value
@@ -81,12 +77,12 @@ impl ShowIds {
     }
 }
 
-/// An id names one film exactly, where a title is a guess about spelling and cut.
+/// An id names one film exactly.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Query {
     Title(String),
     Imdb(String),
-    /// A show, asked for in the way that actually returns whole seasons.
+    /// A show, asked for as season packs.
     Show {
         name: String,
         ids: ShowIds,
@@ -105,7 +101,6 @@ impl Query {
         }
         Some(match pattern.captures(text) {
             Some(found) => Query::Imdb(found[1].to_string()),
-            // releases are filed in scene ASCII: an accented query matches nothing as typed
             None => Query::Title(crate::search::fold(text)),
         })
     }
@@ -116,18 +111,17 @@ pub trait Indexer: Send + Sync {
     fn capabilities(&self) -> Result<String>;
     fn fetch_nzb(&self, url: &str) -> Result<Vec<u8>>;
     fn cover(&self, url: &str) -> Result<(String, Vec<u8>)>;
-    /// Which address this one answers for, so a link can be routed to the indexer it came from.
+    /// Routes a link back to its indexer.
     fn host(&self) -> Option<String>;
 }
 
-/// NZBGeek's documented maximum, and the same price in api hits as asking for fewer.
+/// NZBGeek's maximum; the same price as fewer.
 pub const RESULT_LIMIT: u16 = 100;
 
 pub struct Newznab<H, C> {
     settings: IndexerSettings,
     http: H,
     clock: C,
-    /// What `t=tvsearch` here accepts, asked once and remembered for the run.
     tv_search: Mutex<Option<Vec<String>>>,
 }
 
@@ -172,18 +166,7 @@ impl<H: HttpClient, C: Clock> Newznab<H, C> {
         parse_feed(&String::from_utf8_lossy(&body), self.clock.unix_seconds())
     }
 
-    /// Whole seasons, asked for the way indexers answer with packs instead of episodes.
-    ///
-    /// `t=tvsearch` with an empty `ep` is newznab for "the season itself, not one episode of it".
-    /// Measured against NZBGeek, it answers thirteen packs for Gomorrah where the same show as
-    /// plain text answers a hundred single episodes; the old workaround, appending the word
-    /// "complete" to the name, matched the release name literally and so found only releases with
-    /// that word in them, which is almost none of them.
-    ///
-    /// The second rung is for an indexer that reads the empty `ep` as episode zero and answers
-    /// nothing: the same question without it, and a pack is told from an episode by its name
-    /// afterwards regardless. An id and a name are never mixed, because falling back from "this
-    /// show" to "this spelling" would put another show's packs under the name she picked.
+    /// Empty `ep` asks newznab for whole seasons.
     fn season_packs(
         &self,
         name: &str,
@@ -206,9 +189,7 @@ impl<H: HttpClient, C: Clock> Newznab<H, C> {
         self.ask(&asked, category)
     }
 
-    /// The ids this indexer says `t=tvsearch` understands. Asked once: capabilities do not change
-    /// under us, and the question costs no search hit. An indexer that will not answer it is left
-    /// with the name search, which needs no capability, and that is the whole recovery.
+    /// Asked once; refusal leaves the name search.
     fn tv_search_params(&self) -> Vec<String> {
         let mut remembered = self.tv_search.lock().expect("not poisoned");
         if let Some(known) = remembered.as_ref() {
@@ -226,7 +207,6 @@ impl<H: HttpClient, C: Clock> Newznab<H, C> {
     }
 
     fn get(&self, url: String, what: &str) -> Result<Vec<u8>> {
-        // the default agent of a scripting library gets a blanket 403 from indexers
         let request = Request::get(url).header("User-Agent", "MamaCine/1.0");
         Ok(expect_success(what, self.http.send(request)?)?.body)
     }
@@ -245,7 +225,7 @@ impl<H: HttpClient, C: Clock> Indexer for Newznab<H, C> {
         }
     }
 
-    /// Validating the key with a capability query, which does not spend a search hit.
+    /// Validates the key without spending a search.
     fn capabilities(&self) -> Result<String> {
         let parameters = [("t", "caps"), ("apikey", self.settings.api_key.as_str())];
         let body = self.get(self.url(&parameters), "the indexer")?;
@@ -270,9 +250,6 @@ impl<H: HttpClient, C: Clock> Indexer for Newznab<H, C> {
     }
 
     fn cover(&self, url: &str) -> Result<(String, Vec<u8>)> {
-        // fetched here rather than by the page, so the indexer never sees the viewer. The site
-        // is what is trusted, not the exact machine: indexers serve covers from sister hosts
-        // like imgs.example.info beside api.example.info.
         let allowed = match (host_of(url), host_of(&self.settings.base_url)) {
             (Some(cover_host), Some(api_host)) => same_site(&cover_host, &api_host),
             _ => false,
@@ -293,7 +270,6 @@ fn host_of(url: &str) -> Option<String> {
     Some(rest.split('/').next()?.to_lowercase())
 }
 
-/// The registered name and its suffix: `imgs.indexer.info` and `api.indexer.info` are one site.
 fn same_site(left: &str, right: &str) -> bool {
     let tail = |host: &str| {
         host.rsplit('.')
@@ -317,7 +293,7 @@ pub fn encode_component(value: &str) -> String {
         .collect()
 }
 
-/// `<tv-search available="yes" supportedParams="q,rid,tvdbid,tvmazeid,season,ep"/>`, split.
+/// The advertised `supportedParams`, split.
 pub fn tv_search_params(xml: &str) -> Vec<String> {
     let Ok(document) = roxmltree::Document::parse(xml) else {
         return Vec::new();
@@ -445,7 +421,7 @@ mod tests {
     use crate::clock::FixedClock;
     use crate::http::fake::FakeHttp;
 
-    const NOW: i64 = 1_787_047_200; // Tue, 18 Aug 2026 10:00:00 +0000
+    const NOW: i64 = 1_787_047_200;
 
     fn feed() -> String {
         r#"<?xml version="1.0" encoding="UTF-8"?>
@@ -502,7 +478,7 @@ mod tests {
         );
         assert_eq!(first.about, "Das Boot · 1981 · ★8.4 · Drama, War · 149 min");
         assert_eq!(first.age_days, Some(1.0));
-        assert!(first.tags.contains(&Tag::Spanish));
+        assert!(first.tags.contains(&Tag::Dub("es")));
     }
 
     #[test]
@@ -736,8 +712,6 @@ mod tests {
         assert!(indexer.http.requests().is_empty(), "it must not even ask");
     }
 
-    // NZBGeek answers searches from api.nzbgeek.info and serves covers from a sister host; the
-    // site is what is trusted, not the exact machine name.
     #[test]
     fn cover_art_from_a_sister_host_of_the_indexer_is_allowed() {
         let indexer = indexer(vec![FakeHttp::ok("jpg-bytes")]);

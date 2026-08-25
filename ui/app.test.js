@@ -1,6 +1,3 @@
-// The interface, exercised in a real DOM. Checking that the file parses proves nothing: the bugs
-// this catches were a stale index, a screen that never drew itself, and a name that quietly
-// resolved to a DOM element.
 
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
@@ -38,6 +35,7 @@ const SETTINGS = {
   news_connections: 8, news_encrypted: true, subtitles_key: 'otra-clave',
   subtitles_agent: 'mamacine v1.0', subtitles_user: 'fnune', subtitles_password_set: true,
   destination: '/home/fausto/Descargas', language: 'any', tmdb_key: '',
+  ui_language: '', app_language: 'es',
   autostart: false, keep_running: true,
   settings_path: '/home/fausto/.config/mamacine/settings.json',
   log_path: '/home/fausto/.local/share/mamacine/mamacine.log',
@@ -58,15 +56,12 @@ function start({
 } = {}) {
   const calls = [];
   let releaseSuggest = null;
-  // what the next progress poll answers; a test may rewrite it mid-flight to land a download
   const live = { active, finished, shelf, free_space, free_bytes, problem };
   const invoke = async (command, args) => {
     calls.push({ command, args });
     if (fail && fail === command) throw new Error('el buscador no responde');
     switch (command) {
       case 'search':
-        // the backend says whether it knew which title she meant, by a pick or by a name
-        // it identified; the fake only knows about the pick
         return { films, seasons, notice: searchNotice,
                  exact: searchExact ?? Boolean(args.kind) };
       case 'suggest':
@@ -88,7 +83,7 @@ function start({
       case 'synopsis': return synopsis;
       case 'library_synopsis': return synopsis;
       case 'read_settings': return settings;
-      case 'save_settings': return { ...args.incoming, ready: true };
+      case 'save_settings': return { ...args.incoming, app_language: 'es', ready: true };
       case 'check_settings': return 'NZBGeek: funciona.\nServidor de descargas: funciona.';
       case 'choose_folder': return '/home/fausto/Vídeos';
       case 'cover': return 'data:image/jpeg;base64,AAA';
@@ -101,17 +96,13 @@ function start({
   };
 
   const html = readFileSync(new URL('./index.html', import.meta.url), 'utf8');
-  // 'outside-only' gives a script context without letting the page run its own scripts
   const dom = new JSDOM(html, { url: 'http://localhost/', runScripts: 'outside-only' });
   dom.window.__TAURI__ = { core: { invoke } };
   dom.window.requestAnimationFrame = (draw) => { draw(); return 0; };
   dom.window.cancelAnimationFrame = () => {};
-  // the page polls forever; a test that leaves that running never finishes. The callback is kept
-  // instead, so a test can run a beat of it deliberately.
   const beats = [];
   dom.window.setInterval = (beat) => beats.push(beat);
   dom.window.clearInterval = () => {};
-  // the suggestion debounce becomes immediate, so a test types and looks rather than waits
   dom.window.setTimeout = (fn) => { fn(); return 0; };
   dom.window.clearTimeout = () => {};
   dom.window.eval(readFileSync(new URL('./vendor/htm-preact.js', import.meta.url), 'utf8'));
@@ -131,7 +122,6 @@ const settle = () => new Promise((done) => setTimeout(done, 0));
 const click = (app, target) =>
   target.dispatchEvent(new app.window.Event('click', { bubbles: true }));
 
-// The shelf is a grid of covers now: every card opens the page of the thing, and nothing else.
 async function openOwned(app, position = 0) {
   click(app, app.document.querySelector('nav button[data-screen="library"]'));
   await settle();
@@ -141,7 +131,6 @@ async function openOwned(app, position = 0) {
 }
 
 async function searchFor(app, text) {
-  // typing, not assigning: the field is bound to state, so the event is what carries the text
   const field = app.document.getElementById('query');
   field.value = text;
   field.dispatchEvent(new app.window.Event('input', { bubbles: true }));
@@ -153,9 +142,6 @@ async function searchFor(app, text) {
   await settle();
 }
 
-// htm drops an element whose void children are not self-closed, and renders its tag name as text
-// instead. That produced a window with the word "section" in it, a missing Buscar button and no
-// layout at all, while every test that asked for a specific element still passed.
 test('the page renders as a page', async () => {
   const app = start();
   await settle();
@@ -191,9 +177,6 @@ test('a poster is an image inside its frame', async () => {
   assert.equal(poster.querySelector('img')?.getAttribute('src'), 'data:image/jpeg;base64,AAA');
 });
 
-// She should not have to know whether a name is a film or a series before she may ask about it,
-// and what she named must never sit below what merely mentions it: the real Game of Thrones
-// listing buried the seasons under a parody, a documentary and an episode review.
 test('one search answers films and seasons together, best match first', async () => {
   const app = start();
   await searchFor(app, 'el sur');
@@ -205,7 +188,6 @@ test('one search answers films and seasons together, best match first', async ()
   assert.equal(asked[0].args.kind, null, 'a typed name says nothing about its kind');
 });
 
-// Quality strings and gigabytes are for the screen where she decides, not for browsing.
 test('a result card carries the name and the year, not the machinery', async () => {
   const app = start();
   await searchFor(app, 'el sur');
@@ -250,8 +232,6 @@ test('typing offers titles, and picking one searches by its exact identity', asy
   assert.ok(!app.document.querySelector('.suggestion'), 'the popover is gone');
 });
 
-// With TMDB configured the titles arrive in her language with the original stated outright;
-// the parentheses appear exactly when both names are known and differ.
 test('a suggestion shows the localized title with the original beside it', async () => {
   const suggestions = [
     { id: '432787', title: 'El hoyo', original: 'The Platform', year: '2019', series: false,
@@ -294,8 +274,6 @@ test('the suggestions close when she clicks anywhere else, without searching', a
   assert.equal(app.document.getElementById('query').value, 'el sur', 'her words stay put');
 });
 
-// A border that appears under the pointer is a shape change, not a highlight: rows grew stray
-// lines and quiet buttons grew boxes. Hover may only change the ground a control sits on.
 test('nothing under the pointer gains or loses a border', () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
   const hovers = css.match(/[^{}]*:hover[^{]*\{[^}]*\}/g) || [];
@@ -307,8 +285,6 @@ test('nothing under the pointer gains or loses a border', () => {
   assert.match(suggestion, /background/, 'a row is marked by its ground');
 });
 
-// A button with no border and no ground is words pretending, and the card actions were exactly
-// that. Every button owns a visible border or a visible ground at rest, not only under the pointer.
 test('no button is naked', () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
   const quiet = css.match(/button\.quiet \{[^}]*\}/s)?.[0] || '';
@@ -317,8 +293,6 @@ test('no button is naked', () => {
   assert.match(link, /border: 1px solid/, 'card actions are real buttons');
 });
 
-// "NZBGeek: funciona." arrived with a red edge, which reads as something wrong. The curtain red
-// belongs to actions and failures; a neutral notice is neutral.
 test('good news is never dressed in the failure color', () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
   const note = css.match(/\.note \{[^}]*\}/s)?.[0] || '';
@@ -358,8 +332,6 @@ test('a series suggestion searches by its proper name', async () => {
     'she said it is a series, so films are not even asked for');
 });
 
-// Typing the name and pressing Buscar is the same act as tapping the row, so it earns the same
-// answer: a title the search identified is not a title she misspelled.
 test('an empty answer to a name that was identified never blames her spelling', async () => {
   const app = start({ films: [], seasons: [], searchExact: true });
   await searchFor(app, 'el castillo ambulante');
@@ -367,9 +339,6 @@ test('an empty answer to a name that was identified never blames her spelling', 
     /Existe, pero ahora mismo no la encuentro/);
 });
 
-// The box must hold something she could have typed. "El castillo ambulante (ハウルの動く城)" is a
-// label for choosing between rows, and putting it in the box makes the app look like it searched
-// for that, which it never did.
 test('picking a title leaves her own language in the box', async () => {
   const suggestions = [
     { id: '0347149', title: 'El castillo ambulante', original: null, year: '2004', series: false,
@@ -388,8 +357,6 @@ test('picking a title leaves her own language in the box', async () => {
   assert.equal(app.document.getElementById('query').value, 'El castillo ambulante');
 });
 
-// Saying "no hay nada con ese nombre" underneath a list that is showing that very name reads as
-// the app arguing with itself.
 test('nothing is called missing while the suggestions are showing it', async () => {
   const suggestions = [
     { id: '0347149', title: 'El castillo ambulante', original: null, year: '2004', series: false,
@@ -406,8 +373,6 @@ test('nothing is called missing while the suggestions are showing it', async () 
   assert.equal(app.document.querySelector('#results .empty'), null);
 });
 
-// "Cuéntame cómo pasó" exists and NZBGeek simply does not carry it. Telling her to check her
-// spelling, about a title she picked from a list, blames her for the indexer's catalogue.
 test('an empty answer to a picked title never blames her spelling', async () => {
   const suggestions = [
     { id: '0302447', title: 'Cuéntame cómo pasó', original: null, year: '2001', series: true,
@@ -428,15 +393,12 @@ test('an empty answer to a picked title never blames her spelling', async () => 
   assert.match(empty.textContent, /Existe, pero ahora mismo no la encuentro/);
   assert.ok(!/escribirlo de otra manera/.test(empty.textContent), 'her spelling was fine');
 
-  // a typed search that finds nothing points at the path that works: the suggestions
   const typed = start({ films: [], seasons: [] });
   await searchFor(typed, 'cuentame commo passo');
   assert.match(typed.document.querySelector('#results .empty').textContent,
     /elige uno de los títulos/);
 });
 
-// The debounce had already asked for suggestions when she hit Enter; the answer landed after
-// the search and reopened the popover over her results.
 test('a suggestion answer that arrives after she searched is thrown away', async () => {
   const suggestions = [
     { id: '0086010', title: 'El Sur', original: null, year: '1983', series: false,
@@ -448,7 +410,6 @@ test('a suggestion answer that arrives after she searched is thrown away', async
   field.value = 'el sur';
   field.dispatchEvent(new app.window.Event('input', { bubbles: true }));
   await settle();
-  // the lookup is still in flight when she hits Enter
   app.document.getElementById('search').dispatchEvent(
     new app.window.Event('submit', { bubbles: true, cancelable: true }),
   );
@@ -456,15 +417,12 @@ test('a suggestion answer that arrives after she searched is thrown away', async
   await settle();
   assert.ok(app.document.querySelector('#results .film'), 'her results arrived');
 
-  app.releaseSuggest(); // now the stale answer lands
+  app.releaseSuggest();
   await settle();
   assert.ok(!app.document.querySelector('.suggestion'),
     'and it never opens the popover on top of her results');
 });
 
-// A film mid-chase lives in `finished` while its next copy is being decided. A fresh window
-// said "no se está descargando nada" over it, and the detail screen offered Descargar for a
-// season that was downloading at that very moment.
 test('a fresh window adopts a film that is mid-chase instead of claiming idleness', async () => {
   const finished = [
     { id: 7, title: 'El Sur', ok: false, retrying: true, next_id: null, detail: '',
@@ -512,7 +470,6 @@ test('downloading asks for the film that was opened', async () => {
   const app = start();
   await searchFor(app, 'el sur');
 
-  // display order is by relevance; the film's own index must survive the reshuffle
   click(app, [...app.document.querySelectorAll('#results .film')]
     .find((node) => /Volver/.test(node.textContent)));
   await settle();
@@ -524,9 +481,6 @@ test('downloading asks for the film that was opened', async () => {
   assert.equal(grab.args.series, false);
 });
 
-// The ficha is the page about this film. Pressing the button that is about it used to swap it
-// for a screen of machinery, so what she was reading — what it is, what it is about — went away
-// at the moment she acted on it, and one film had two places to be looked at.
 test('starting a download leaves her on the ficha, with the copy coming down beneath it', async () => {
   const app = start({ synopsis: 'Una niña y su padre en el norte.' });
   await searchFor(app, 'el sur');
@@ -555,7 +509,6 @@ test('a search that fails says so instead of throwing', async () => {
   assert.match(notice.textContent, /no responde/);
 });
 
-// One indexer down is a caveat on a working answer, never a failure dressed as one.
 test('a place that could not answer is a calm note beside the results', async () => {
   const app = start({ searchNotice: 'No he podido preguntar a NZBGeek.' });
   await searchFor(app, 'el sur');
@@ -637,8 +590,22 @@ test('a season nobody could identify still opens, without an episode list', asyn
   assert.doesNotMatch(detail.textContent, /IMDb/);
 });
 
-// A card decides nothing: it opens the page of the thing, which is where playing it is decided.
-// Playing whatever the grid happened to hold under her finger is how a card behaved before.
+// The interface speaks the language the backend resolved: Spanish by default, English when
+// the setting or the computer says so. One switch drives every word on screen.
+test('the interface speaks the language the settings resolve', async () => {
+  const app = start({ settings: { ...SETTINGS, app_language: 'en' } });
+  await settle();
+  const title = app.document.getElementById('search-title');
+  assert.match(title.textContent, /What do you feel like watching today/);
+  assert.equal(app.document.documentElement.lang, 'en');
+
+  const spanish = start({ settings: { ...SETTINGS, app_language: 'es' } });
+  await settle();
+  assert.match(spanish.document.getElementById('search-title').textContent,
+    /Qué te apetece ver hoy/);
+  assert.equal(spanish.document.documentElement.lang, 'es');
+});
+
 test('a film she owns opens its own page, and plays by id from there', async () => {
   const shelf = [
     { id: 42, title: 'El Sur', subtitle_note: '', cover_url: null, year: '1983',
@@ -658,9 +625,22 @@ test('a film she owns opens its own page, and plays by id from there', async () 
   assert.equal(app.calls.find((call) => call.command === 'play').args.id, 42);
 });
 
-// A folder of release-named files is the guts this app promises to keep closed. A season opens
-// as a list of episodes she can count, and each of those opens a page of its own: a row that
-// starts a film the moment it is touched never said what it was about to do.
+test('a track that names its regional variety is repeated, not flattened', async () => {
+  const shelf = [
+    { id: 7, title: 'Roma', subtitle_note: '', cover_url: null, year: '2018',
+      languages: { audio_languages: ['es-MX'], subtitle_languages: ['es-419'] }, series: false },
+  ];
+  const app = start({ shelf });
+  await settle();
+  await openOwned(app);
+
+  const page = app.document.getElementById('screen-owned');
+  assert.match(page.textContent, /audio en español \(MX\)/);
+  assert.match(page.textContent, /subtítulos en español latinoamericano/);
+  assert.match(page.textContent, /Subtítulos en español/,
+    'regional Spanish subtitles still count as Spanish');
+});
+
 test('a season on the shelf opens as episodes, each with a page of its own', async () => {
   const shelf = [
     { id: 9, title: 'Cuéntame · Temporada 1', subtitle_note: '', cover_url: null, year: '',
@@ -698,7 +678,6 @@ test('a season on the shelf opens as episodes, each with a page of its own', asy
   assert.equal(played.args.position, 1);
 });
 
-// The description is what an episode page is for: "Episodio 4" says nothing about the evening.
 test('an episode page says what happens in it, where the database says so', async () => {
   const shelf = [
     { id: 9, title: 'Cuéntame · Temporada 1', subtitle_note: '', cover_url: null, year: '',
@@ -722,8 +701,6 @@ test('an episode page says what happens in it, where the database says so', asyn
   assert.match(page.textContent, /Episodio 1/, 'which episode it is, still said');
 });
 
-// "Sin subtítulos en español en 2 de 12 episodios" named no episode, so it could not be acted on.
-// The evening she is choosing is the moment that answer is worth something.
 test('the episode without subtitles is the one that says so', async () => {
   const shelf = [
     { id: 9, title: 'Gomorrah · Temporada 1', cover_url: null, year: '', languages: {},
@@ -752,7 +729,6 @@ test('the episode without subtitles is the one that says so', async () => {
                /no tiene subtítulos en español/, 'and says it again where she presses play');
 });
 
-// The app's own error message tells her to remove watched films; the page must offer the way.
 test('a film can be removed from its page, with one chance to change her mind', async () => {
   const shelf = [
     { id: 42, title: 'El Sur', subtitle_note: '', cover_url: null, year: '1983',
@@ -780,8 +756,6 @@ test('a film can be removed from its page, with one chance to change her mind', 
     'recoverable is a fact she should have');
 });
 
-// "Buscar subtítulos" stood over films whose subtitles were already there, which made it an
-// errand with no point. The page states what she has; looking again is the small button beside it.
 test('the page says which subtitles are there, and offers to look again', async () => {
   const ready = start({ shelf: [
     { id: 42, title: 'El Sur', subtitle_note: 'Subtítulos en español listos', cover_url: null,
@@ -808,8 +782,6 @@ test('the page says which subtitles are there, and offers to look again', async 
   assert.match(missing.document.getElementById('screen-owned').textContent, /añadidos/);
 });
 
-// The download rides the masthead as a pill: it answers "¿cómo va lo mío?" from any screen,
-// names the film the download screen headlines, and counts the rest rather than averaging them.
 test('the download follows her to every screen, and only exists while there is one', async () => {
   const idle = start();
   await idle.poll();
@@ -836,8 +808,6 @@ test('the download follows her to every screen, and only exists while there is o
   assert.equal(app.document.getElementById('screen-film').hidden, false);
 });
 
-// A download she watched settle is over: leaving the screen retires it and the pill with it,
-// so a finished film does not ride the masthead forever. One still going is never abandoned.
 test('a settled download is retired by walking away from it', async () => {
   const app = start({
     active: [{ id: 7, title: 'El Sur', status: 'downloading', percent: 90, cover_url: null,
@@ -861,7 +831,6 @@ test('a settled download is retired by walking away from it', async () => {
       attempt: 1, attempts_total: 1, untried: 0, story: [] },
   ];
   await app.poll();
-  // a copy that arrived is a film on her shelf, not a screen congratulating her about it
   assert.ok(!app.document.getElementById('screen-film'),
     'the screen goes where the film now is');
   assert.equal(app.calls.filter((call) => call.command === 'library_synopsis').length, 1,
@@ -870,9 +839,6 @@ test('a settled download is retired by walking away from it', async () => {
     'the pill retires with it, rather than riding the masthead finished');
 });
 
-// A swap is started from her own film's page, and what lands is a new record: leaving her where
-// she was showed her the copy she had just asked to change, with nothing saying the new one had
-// arrived. The bar flashed at zero and vanished and the film on screen never changed.
 test('a swap ends on the copy that landed, not on the one it replaced', async () => {
   const app = start({
     shelf: [{ id: 4, title: 'La virgen roja', year: '2024', cover_url: null,
@@ -906,8 +872,6 @@ test('a swap ends on the copy that landed, not on the one it replaced', async ()
   assert.equal(opened[opened.length - 1].args.id, 11, 'the page follows the copy that landed');
 });
 
-// She was somewhere else when it landed. The notification already told her, and taking the
-// screen out from under her to say it again is the app interrupting to repeat itself.
 test('a download that lands while she is elsewhere does not take the screen', async () => {
   const app = start({
     active: [{ id: 7, title: 'El Sur', status: 'downloading', percent: 90, cover_url: null,
@@ -929,8 +893,6 @@ test('a download that lands while she is elsewhere does not take the screen', as
   assert.equal(app.calls.filter((call) => call.command === 'library_synopsis').length, 0);
 });
 
-// The space her question deserves: what the film is about, where its page is. Both are garnish
-// from the film database; without a key the ficha stands without them.
 test('the film page tells what it is about when the film database knows', async () => {
   const words = 'Un maestro republicano enseña a un niño lo que es la libertad.';
   const app = start({ synopsis: words });
@@ -950,9 +912,6 @@ test('the film page tells what it is about when the film database knows', async 
   assert.ok(!bare.document.getElementById('synopsis'), 'no ficha, no empty paragraph');
 });
 
-// "445 GB libres de 1861 GB" asks her to divide. The bar shows the proportion, the label keeps
-// the number, the tooltip keeps the percentage. The disk lives with her films, on the shelf; a
-// strip claiming a whole edge of every screen to say "412 GB libres" was furniture.
 test('free space is drawn on the shelf, not on a strip of its own', async () => {
   const plenty = start();
   await plenty.poll();
@@ -965,11 +924,9 @@ test('free space is drawn on the shelf, not on a strip of its own', async () => 
   assert.ok(!/de 953 GB/.test(disk.textContent), 'the division is drawn, not narrated');
   const meter = disk.querySelector('.meter');
   assert.match(meter.getAttribute('title'), /43 % libre/);
-  // 412 of 953 free → 57% used, drawn
   assert.match(meter.querySelector('.used').getAttribute('style'), /width: 56\./);
 });
 
-// Running low is the one disk fact that must follow her everywhere, with the action beside it.
 test('a disk getting tight becomes a banner naming the way out', async () => {
   const tight = start({ free_bytes: 15 * 1024 ** 3, free_space: '15 GB' });
   await tight.poll();
@@ -983,9 +940,6 @@ test('a disk getting tight becomes a banner naming the way out', async () => {
     'the shelf bar turns urgent too');
 });
 
-// The two screens in her screenshot contradicted each other: one said "ya la tienes" with a full
-// bar, the other said there were no films at all. The first was reading nzbget's history, where a
-// refused retry looks exactly like a film that is already here.
 test('"ya la tienes" is never said about a film that is not on the shelf', async () => {
   const app = start({ shelf: [], have: null });
   await searchFor(app, 'el sur');
@@ -1026,8 +980,6 @@ test('a season she already has is called a season and opens its episodes', async
     .some((button) => button.textContent.includes('Ver los episodios')));
 });
 
-// A dead copy is the ordinary case on usenet, not a dead end. She was shown "no se ha podido
-// descargar" and left with a decision she has no way to make.
 test('a copy that turns out to be dead is followed to the next one', async () => {
   const finished = [
     { id: 7, title: 'El Sur', ok: false, subtitle_note: '', cover_url: null, detail: '',
@@ -1050,18 +1002,12 @@ test('a copy that turns out to be dead is followed to the next one', async () =>
   const screen = app.document.getElementById('screen-detail');
   assert.match(screen.textContent, /Descargando/, 'it is still going');
   assert.ok(!/no he podido/i.test(screen.textContent), 'nothing has failed yet');
-  // "Copia 2 de 4" was bookkeeping: a count she cannot use, that changed while she read it
   assert.ok(!/Copia \d/.test(screen.textContent), 'she is not made to count copies');
-  // the dead copy's post-mortem was riding along on the live download and stood exactly where
-  // the time left should have been
   assert.ok(!/faltaban/.test(screen.textContent), 'the dead copy stops talking once it is dead');
   assert.match(screen.textContent, /Unos 40 minutos/, 'how long it has left');
   assert.match(screen.textContent, /25 MB\/s/, 'and how fast it is going');
 });
 
-// Between a copy dying and the app choosing the next one there are a few seconds during which
-// the failure is real but the story is not over. The screen flashed "No he podido conseguirla"
-// and then took it back; nothing she is told may be about to become untrue.
 test('a failure the app has not answered yet reads as searching, not as the end', async () => {
   const finished = [
     { id: 7, title: 'El Sur', ok: false, retrying: true, next_id: null, detail: '',
@@ -1081,8 +1027,6 @@ test('a failure the app has not answered yet reads as searching, not as the end'
   assert.ok(!/No he podido/.test(status), 'the flash of false failure is the old bug');
 });
 
-// The bar froze at the dead copy's percent while "buscando otra versión", then jumped to zero:
-// the original "bar went backwards" complaint in miniature. A new copy is a new download.
 test('a dead copy empties the bar once, as the words change', async () => {
   const finished = [
     { id: 7, title: 'El Sur', ok: false, retrying: true, next_id: null, detail: '',
@@ -1102,7 +1046,6 @@ test('a dead copy empties the bar once, as the words change', async () => {
   await app.poll();
   assert.match(app.document.querySelector('.bar i').getAttribute('style'), /43/);
 
-  // the same film, one poll later: gone from the queue, undecided in history
   const dead = start({ active: [], finished });
   await searchFor(dead, 'el sur');
   click(dead, dead.document.querySelector('#results .film'));
@@ -1116,8 +1059,6 @@ test('a dead copy empties the bar once, as the words change', async () => {
     'the bar empties with the words, not later');
 });
 
-// While the server is down, "buscando otra versión" under a banner about the server would be a
-// small lie: the truthful word is waiting.
 test('a retry that is waiting for the server says so', async () => {
   const finished = [
     { id: 7, title: 'El Sur', ok: false, retrying: true, next_id: null, detail: '',
@@ -1137,8 +1078,6 @@ test('a retry that is waiting for the server says so', async () => {
   assert.match(app.document.getElementById('problem').textContent, /sigo intentando/);
 });
 
-// The give-up sentence is the headline's detail AND the story's final line; the screen said it
-// twice in a row, which reads as a stutter. Once in plain sight; the record stays in the fold.
 test('the give-up sentence is not said twice above the fold', async () => {
   const said = 'No he podido conseguir esta temporada: la única copia que había estaba estropeada.';
   const finished = [
@@ -1184,8 +1123,6 @@ test('when every copy has been tried it says so once, and stops', async () => {
     'nothing left to try, so no button pretends otherwise');
 });
 
-// The give-up screen was an instruction with no door: it said what was wrong and offered no way
-// to act. When copies were kept beyond the chase limit, spending them is one button.
 test('a give-up with copies left offers to try them, and follows the new attempt', async () => {
   const finished = [
     { id: 7, title: 'El Sur', ok: false, retrying: false, series: false, subtitle_note: '',
@@ -1211,7 +1148,6 @@ test('a give-up with copies left offers to try them, and follows the new attempt
     'the screen follows the new attempt instead of staying on the corpse');
 });
 
-// nzbget pauses itself when the disk runs out, and "últimos detalles" over a stalled bar was a lie.
 test('a paused download says it is paused, and why when the disk is the reason', async () => {
   const active = [
     { id: 8, title: 'El Sur', status: 'paused', percent: 40, cover_url: null,
@@ -1227,7 +1163,6 @@ test('a paused download says it is paused, and why when the disk is the reason',
   assert.match(screen.textContent, /disco está casi lleno/);
 });
 
-// The screen froze in place when nzbget stopped answering, which is the app lying by silence.
 test('a downloader that stopped answering is said plainly on screen', async () => {
   const app = start({ problem: 'No consigo conectarme con el descargador.' });
   await app.poll();
@@ -1235,13 +1170,11 @@ test('a downloader that stopped answering is said plainly on screen', async () =
   const banner = app.document.getElementById('problem');
   assert.match(banner.textContent, /descargador/);
 
-  // the banner is where a failed start leaves whoever is fixing it, so the log is offered there
   click(app, app.document.getElementById('problem-log'));
   await settle();
   assert.ok(app.calls.some((call) => call.command === 'open_log_file'));
 });
 
-// A second download used to be a number on a badge and nothing else.
 test('every running download is reachable from the download screen', async () => {
   const active = [
     { id: 8, title: 'El Sur', status: 'downloading', percent: 12, cover_url: null,
@@ -1276,7 +1209,6 @@ test('the shelf is her disk, not what the downloader happens to remember', async
   assert.match(app.document.getElementById('shelf').textContent, /Todavía no hay nada aquí/);
 });
 
-// Settings is the one screen he will use, and the indexer is the part most likely to change.
 const openSettings = async (app) => {
   await settle();
   click(app, app.document.querySelector('nav button[data-screen="settings"]'));
@@ -1292,8 +1224,6 @@ const type = (app, field, value) => {
   field.dispatchEvent(new app.window.Event('input', { bubbles: true }));
 };
 
-// Two edits in one tick both built on the state before either of them, so the first was lost:
-// typing a name and then an address, faster than a redraw, left the name behind.
 test('two settings typed one after the other are both kept', async () => {
   const app = start();
   await openSettings(app);
@@ -1333,8 +1263,6 @@ test('an indexer can be turned off without being thrown away', async () => {
 });
 
 test('a stored password is never sent back to the screen', async () => {
-  // the backend answers with news_password_set and never with the password; this is the screen
-  // holding up its own end, in case one ever arrives
   const app = start({ settings: { ...SETTINGS, news_password: 'la-de-su-cuenta' } });
   await openSettings(app);
   const values = [...app.document.querySelectorAll('#screen-settings input')]
@@ -1345,9 +1273,6 @@ test('a stored password is never sent back to the screen', async () => {
   assert.equal(password.getAttribute('placeholder'), 'sin cambios');
 });
 
-// Blanking the box as it was drawn was what kept the password out of it, and the redraw after
-// every letter put the blank back: typing "secreto" left one letter behind, and that letter was
-// what got saved.
 test('a password can be typed into, letter by letter', async () => {
   const app = start();
   await openSettings(app);
@@ -1396,8 +1321,6 @@ test('the settings file can be opened from the screen that writes it', async () 
   assert.ok(app.calls.some((call) => call.command === 'open_settings_file'));
 });
 
-// The one thing that was missing when the downloader would not start on her computer: the app
-// said "look at the log" and nothing on any screen said where that was or opened it.
 test('the log can be opened from the settings screen', async () => {
   const app = start();
   await openSettings(app);
@@ -1453,7 +1376,6 @@ test('the settings screen is where she lands when nothing is filled in yet', asy
   assert.ok(app.document.getElementById('screen-settings'), 'there is nowhere else to go yet');
 });
 
-// The old check validated whatever was loaded at startup, which is exactly the thing being replaced.
 test('comprobar checks the values as typed, not as last saved', async () => {
   const app = start();
   await openSettings(app);
@@ -1469,7 +1391,6 @@ test('comprobar checks the values as typed, not as last saved', async () => {
   assert.match(app.document.getElementById('screen-settings').textContent, /funciona/);
 });
 
-// Which language she wants is a fact about her, asked once here, never a chip in her path.
 test('her language lives in the settings and travels with the save', async () => {
   const app = start();
   await openSettings(app);
@@ -1498,8 +1419,6 @@ test('the optional film database key lives with the technical settings', async (
   assert.equal(sent.tmdb_key, 'una-clave-tmdb');
 });
 
-// Opening with the computer and surviving a closed window are hers to decide, in plain words,
-// beside the folder and the language rather than behind the technical fold.
 test('the startup and tray switches are mom-level settings', async () => {
   const app = start();
   await openSettings(app);
@@ -1540,8 +1459,6 @@ test('going back from a film returns to the results she came from', async () => 
   assert.equal(app.document.querySelectorAll('#results .film').length, 3);
 });
 
-// The fold's own button stretched across a row of its own, twice the size of the buttons it
-// belongs with. It is a button among the buttons.
 test('the way to other copies sits with the other buttons, at their size', async () => {
   const app = start();
   await searchFor(app, 'el sur');
@@ -1569,8 +1486,6 @@ test('choosing another copy downloads that copy', async () => {
 
   const copies = app.document.querySelectorAll('.version');
   assert.ok(copies.length > 1, 'there is something to choose between');
-  // the row was the button, so nothing said that touching a line of text spends an hour of her
-  // connection; the button says it, and the row is a row
   const pick = copies[1].querySelector('button.pick');
   assert.ok(pick, 'each copy carries the button that starts it');
   assert.match(pick.textContent, /Descargar esta copia/);
@@ -1579,9 +1494,6 @@ test('choosing another copy downloads that copy', async () => {
   assert.equal(app.calls.find((call) => call.command === 'grab').args.version, 1);
 });
 
-// The settings screen was styled through `form#settings`, and there is no form and no such id:
-// every rule for it was dead, so the labels and boxes fell back to browser defaults and the screen
-// looked like a 1998 form. Nothing failed, because a stylesheet that matches nothing is silent.
 test('every id the stylesheet styles is an id the app actually renders', async () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
   const selectors = css.split('}').map((rule) => rule.split('{')[0]).join(' ');
@@ -1593,14 +1505,11 @@ test('every id the stylesheet styles is an id the app actually renders', async (
   const collect = () => {
     for (const node of app.document.querySelectorAll('[id]')) rendered.add(`#${node.id}`);
   };
-  // the download screen is reached through the pill, which needs a download; it holds no
-  // styled ids of its own beyond what the walk below already renders
   for (const screen of ['search', 'library', 'settings']) {
     click(app, app.document.querySelector(`nav button[data-screen="${screen}"]`));
     await settle();
     collect();
   }
-  // the detail screen is reached by opening a film, not from the tabs
   click(app, app.document.querySelector('nav button[data-screen="search"]'));
   await settle();
   await searchFor(app, 'el sur');
@@ -1622,13 +1531,10 @@ test('the settings fields are stacked, not run together on one line', async () =
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
   assert.match(css, /#screen-settings label \{[^}]*display: block/, 'labels own their line');
   assert.match(css, /#screen-settings input \{[^}]*width: 100%/, 'boxes fill that line');
-  // the tick box is the one input that must not stretch across the screen
   assert.match(css, /#screen-settings \.switch input \{[^}]*width: auto/);
   assert.ok(app.document.querySelector('#screen-settings .switch input[type="checkbox"]'));
 });
 
-// The shelf holds seasons too, and said "Mis películas" over them, so a season that had downloaded
-// looked like it had gone somewhere else.
 test('the shelf says it holds series, not only films', async () => {
   const shelf = [
     { id: 3, title: 'Cuéntame · Temporada 1', year: null, cover_url: null, subtitle_note: '',
@@ -1644,10 +1550,6 @@ test('the shelf says it holds series, not only films', async () => {
   assert.match(app.document.getElementById('shelf').textContent, /Serie/);
 });
 
-// The screen changed under her with no explanation: the bar went backwards, the wording changed,
-// and the only sentence on offer was about a download that no longer existed. Everything the app
-// does on its own is a dated line she can read; the latest sits under the headline, the rest
-// behind a fold, because a growing timestamped list reads as a log.
 test('everything the app does on its own is written down where she can read it', async () => {
   const story = [
     { at: 1_755_712_940, said: 'Empieza la descarga.', why: 'copia 1 de 3' },
@@ -1671,13 +1573,10 @@ test('everything the app does on its own is written down where she can read it',
   const lines = [...app.document.querySelectorAll('#screen-film .story li')];
   assert.equal(lines.length, 3, 'the whole story, not just the latest line');
   assert.match(lines[1].textContent, /estaba estropeada/);
-  // the technical reason stays within reach without being said out loud
   assert.match(lines[1].getAttribute('title'), /FAILURE\/HEALTH/);
   assert.ok(app.document.querySelector('.story-fold summary'), 'and it waits behind a fold');
 });
 
-// "Copia 3 de 7. Esa copia estaba incompleta: faltaban 71 de 6257 partes." named two things she
-// has no meaning for, about a download she could not tell apart from the one she was watching.
 test('the download screen never says the words copia, partes or a status code', async () => {
   const active = [
     { id: 8, title: 'El Sur', status: 'downloading', percent: 3, cover_url: null, year: '1983',
@@ -1698,8 +1597,6 @@ test('the download screen never says the words copia, partes or a status code', 
   assert.match(spoken, /Unos 40 minutos/, 'what she actually wants: how long');
 });
 
-// "Hay sitio de sobra" hid every number behind a verdict. The facts are hers: what it
-// occupies, what is free, how big the disk is, how long it will take.
 test('the decision screen shows the size, the free space and the whole disk', async () => {
   const app = start();
   await settle();
@@ -1719,9 +1616,6 @@ test('the decision screen shows the size, the free space and the whole disk', as
   assert.ok(!app.document.getElementById('room-warning'), 'nothing to warn about');
 });
 
-// The warning is an addition to the facts, never a replacement, and it carries its own number:
-// the room a download needs while it unpacks is more than its size, and saying so is why the
-// warning can be believed. She decides; only the backend's refusal (with numbers) can say no.
 test('a film that may not fit warns her with the number behind the warning', async () => {
   const tight = start({ versions: [{ ...VERSIONS[0], room: 'tight', needs: '3,7 GB' }] });
   await tight.poll();
@@ -1746,8 +1640,6 @@ test('a film that may not fit warns her with the number behind the warning', asy
     'still her call: the backend refuses with numbers if it truly cannot');
 });
 
-// An indexer that has no artwork for a film left a grey hole in the grid, which reads as a card
-// that failed to load rather than as a film nobody drew a poster for.
 test('a film with no cover gets a drawn frame, not a hole', async () => {
   const app = start();
   await searchFor(app, 'el sur');
@@ -1764,8 +1656,6 @@ test('a film with no cover gets a drawn frame, not a hole', async () => {
     'a film that has a cover is never given the drawn one');
 });
 
-// Stacked, the four short lines of the decision left half the window empty and read as a list of
-// unrelated facts. What it costs sits on one side, what to press on the other.
 test('the decision band reads across the window, not down it', async () => {
   const css = readFileSync(new URL('./styles.css', import.meta.url), 'utf8');
   assert.match(css, /\.band\.decision \{[^}]*display: flex/);

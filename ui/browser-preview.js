@@ -1,5 +1,3 @@
-// Lets the interface be opened in an ordinary browser, so its layout and flow can be worked on
-// without a webview, a GPU or a container. Loaded only by preview.html; the real app never sees it.
 
 const POSTER = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="300">
@@ -38,8 +36,6 @@ const story = (steps) => steps.map(([minutes, said, why]) => ({
   at: Math.floor(Date.now() / 1000) - minutes * 60, said, why,
 }));
 
-// What she already has, so her own films, their pages and the episode pages can be looked at
-// without downloading anything first.
 const kept = [
   { id: 101, title: 'Cuéntame cómo pasó · Temporada 1', series: true, cover_url: POSTER,
     year: null, subtitle_note: 'Faltan los subtítulos del episodio 3',
@@ -129,7 +125,7 @@ window.__TAURI__ = {
                    key: 'una-clave', enabled: true }], news_port: 563, news_host: 'news.eweka.nl',
                    news_connections: 8, news_encrypted: true, subtitles_agent: 'mamacine v1.0',
                    language: 'any', destination: 'C:\\Películas', autostart: false,
-                   keep_running: true,
+                   keep_running: true, ui_language: '', app_language: 'es',
                    settings_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\settings.json',
                    log_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\mamacine.log' };
         case 'open_settings_file':
@@ -137,7 +133,7 @@ window.__TAURI__ = {
         case 'open_log_folder':
           return null;
         case 'save_settings':
-          return { ...args.incoming, ready: true };
+          return { ...args.incoming, app_language: args.incoming.ui_language || 'es', ready: true };
         case 'check_settings':
           return 'NZBGeek: funciona.\nServidor de descargas: funciona.\nSubtítulos: funciona.';
         case 'episodes':

@@ -1,22 +1,22 @@
-//! Choosing and repairing subtitles. Sync is what actually fails, so timing signals outrank taste.
+//! Choosing subtitles: timing signals outrank taste.
 
 use regex::bytes::Regex as ByteRegex;
 use regex::Regex;
 use std::sync::OnceLock;
 
-/// One result from the subtitle service, reduced to what a decision needs.
+/// One subtitle-service result, reduced for deciding.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Candidate {
     pub file_id: i64,
     pub release: String,
-    /// Uploaded against a file with the same hash, so it cannot drift.
+    /// Same file hash, so it cannot drift.
     pub hash_match: bool,
     pub fps: Option<f64>,
     pub downloads: u64,
     pub rating: f64,
     pub trusted: bool,
     pub machine_translated: bool,
-    /// Translates only the foreign dialogue: nearly blank as a main track.
+    /// Foreign dialogue only; nearly blank overall.
     pub foreign_parts_only: bool,
     pub uploader: Option<i64>,
 }
@@ -28,7 +28,7 @@ pub struct Ranked {
     pub reasons: Vec<&'static str>,
 }
 
-/// What the film itself says about how a subtitle must be timed.
+/// How the film says subtitles must be timed.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MediaInfo {
     pub fps: Option<f64>,
@@ -107,7 +107,7 @@ pub fn name_overlap(ours: &str, theirs: &str) -> f64 {
     shared as f64 / mine.len() as f64
 }
 
-/// A subtitle authored at 25 fps runs about 4% fast against a 23.976 fps copy of the same film.
+/// 25 fps subtitles run fast at 23.976.
 pub fn frame_rate_factor(subtitle_fps: Option<f64>, film_fps: Option<f64>) -> Option<f64> {
     let (subtitle_fps, film_fps) = (subtitle_fps?, film_fps?);
     if subtitle_fps <= 0.0 || film_fps <= 0.0 || (subtitle_fps - film_fps).abs() < 0.05 {
@@ -116,7 +116,7 @@ pub fn frame_rate_factor(subtitle_fps: Option<f64>, film_fps: Option<f64>) -> Op
     Some(subtitle_fps / film_fps)
 }
 
-/// Rewrites timestamps in place on the raw bytes, so the file's own encoding survives untouched.
+/// Rewrites timestamps on raw bytes; encoding survives.
 pub fn rescale(content: &[u8], factor: f64) -> Vec<u8> {
     static TIMESTAMP: OnceLock<ByteRegex> = OnceLock::new();
     let timestamp = TIMESTAMP.get_or_init(|| {
@@ -169,14 +169,8 @@ pub fn last_cue_seconds(content: &[u8]) -> Option<f64> {
         })
 }
 
-/// A cue after the film has ended is always wrong.
 const OVERRUN_TOLERANCE: f64 = 0.02;
-/// Ending early is normal: credits carry no dialogue.
 const UNDERRUN_TOLERANCE: f64 = 0.15;
-/// Below this many cues, stopping early says nothing about which cut it was timed for. The Red
-/// Turtle has almost no dialogue at all: twenty-eight lines across eighty minutes, the last at
-/// sixty-two. Judging that file by how much of the runtime it covers throws away the only Spanish
-/// subtitle the film has.
 const ENOUGH_CUES_TO_JUDGE: usize = 200;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -201,7 +195,6 @@ pub fn check_timing(content: &[u8], duration_seconds: Option<f64>) -> Timing {
             last_cue_minutes: span / 60.0,
         };
     }
-    // a talkative film timed to the wrong cut still has hundreds of cues; a quiet one has a handful
     let talkative = count_cues(content) >= ENOUGH_CUES_TO_JUDGE;
     if talkative && -drift > UNDERRUN_TOLERANCE {
         return Timing::TimedForAnotherCut {
@@ -219,7 +212,7 @@ pub fn count_cues(content: &[u8]) -> usize {
     timestamp.find_iter(content).count() / 2
 }
 
-/// The subtitle service's own hash: the file size plus its first and last 64 KiB, summed as u64.
+/// The service's own hash: size plus end chunks.
 pub fn movie_hash(size: u64, head: &[u8], tail: &[u8]) -> Option<String> {
     const CHUNK: usize = 65536;
     if head.len() < CHUNK || tail.len() < CHUNK {
@@ -373,9 +366,6 @@ mod tests {
         assert!((factor - 1.0427).abs() < 0.0001);
     }
 
-    /// The real case: a 25 fps subtitle whose last cue lands at 199.2 minutes on a 208 minute film.
-    /// A 4% drift hides inside the tolerance that lets subtitles stop before the credits, so the
-    /// duration check cannot catch this on its own. The frame rate the service reports can.
     #[test]
     fn a_converted_subtitle_lands_where_the_film_ends() {
         let film_seconds = 12488.5;
@@ -410,8 +400,6 @@ mod tests {
         ));
     }
 
-    /// The Red Turtle: twenty-eight lines, the last at sixty-two minutes of eighty. Nothing about
-    /// that file is wrong, and rejecting it leaves her with no subtitles at all.
     #[test]
     fn accepts_a_quiet_film_whose_subtitle_covers_little_of_it() {
         let mut sparse = String::new();
@@ -444,7 +432,6 @@ mod tests {
                 seconds % 60,
             ));
         }
-        // the last cue lands at 2 hours 13, against a 3 hour 28 film
         assert!(matches!(
             check_timing(dense.as_bytes(), Some(12488.0)),
             Timing::TimedForAnotherCut { .. }

@@ -1,5 +1,6 @@
 target/
 dist/
+src-tauri/binaries/
 gen/
 node_modules/
 .direnv/

@@ -1,4 +1,4 @@
-//! Time as a dependency. Nothing here calls the system clock on its own.
+//! Time as a dependency.
 
 pub trait Clock: Send + Sync {
     fn unix_seconds(&self) -> i64;
@@ -15,7 +15,7 @@ impl Clock for SystemClock {
     }
 }
 
-/// A clock that only moves when a test moves it.
+/// Moves only when a test moves it.
 pub struct FixedClock(pub std::sync::atomic::AtomicI64);
 
 impl FixedClock {
@@ -35,7 +35,7 @@ impl Clock for FixedClock {
     }
 }
 
-/// Parses the date format newznab feeds use, without pulling in a date library for one field.
+/// The date format newznab feeds use.
 pub fn parse_feed_date(text: &str) -> Option<i64> {
     let text = text.trim();
     let rest = match text.find(", ") {
@@ -80,7 +80,25 @@ pub fn parse_feed_date(text: &str) -> Option<i64> {
     Some(days_from_civil(year, month, day) * 86400 + hours * 3600 + minutes * 60 + seconds - offset)
 }
 
-/// Howard Hinnant's days-from-civil algorithm.
+/// The UTC instant format OpenSubtitles names.
+pub fn parse_utc_instant(text: &str) -> Option<i64> {
+    let text = text.trim();
+    let text = text.strip_suffix('Z').unwrap_or(text);
+    let (date, time) = text.split_once('T')?;
+    let mut date = date.split('-');
+    let year: i64 = date.next()?.parse().ok()?;
+    let month: i64 = date.next()?.parse().ok()?;
+    let day: i64 = date.next()?.parse().ok()?;
+    let mut time = time.split('.').next()?.split(':');
+    let hours: i64 = time.next()?.parse().ok()?;
+    let minutes: i64 = time.next()?.parse().ok()?;
+    let seconds: i64 = time.next().unwrap_or("0").parse().ok()?;
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) || hours > 23 || minutes > 59 {
+        return None;
+    }
+    Some(days_from_civil(year, month, day) * 86_400 + hours * 3600 + minutes * 60 + seconds)
+}
+
 fn days_from_civil(year: i64, month: i64, day: i64) -> i64 {
     let year = if month <= 2 { year - 1 } else { year };
     let era = if year >= 0 { year } else { year - 399 } / 400;
@@ -126,6 +144,22 @@ mod tests {
     fn nonsense_is_rejected_rather_than_guessed() {
         assert_eq!(parse_feed_date("last thursday"), None);
         assert_eq!(parse_feed_date(""), None);
+    }
+
+    #[test]
+    fn reads_the_instant_format_the_subtitle_service_names() {
+        assert_eq!(
+            parse_utc_instant("2021-06-20T17:26:59.000Z"),
+            parse_feed_date("Sun, 20 Jun 2021 17:26:59 +0000")
+        );
+        assert_eq!(parse_utc_instant("1970-01-01T00:00:00Z"), Some(0));
+    }
+
+    #[test]
+    fn an_instant_of_nonsense_is_rejected_rather_than_guessed() {
+        assert_eq!(parse_utc_instant("tomorrow"), None);
+        assert_eq!(parse_utc_instant("2021-99-20T17:26:59Z"), None);
+        assert_eq!(parse_utc_instant(""), None);
     }
 
     #[test]

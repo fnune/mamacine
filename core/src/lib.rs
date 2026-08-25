@@ -1,7 +1,4 @@
-//! Everything Mamá Cine knows how to do, with no user interface and no ambient configuration.
-//!
-//! Nothing in this crate reads an environment variable, a file or a keyring on its own. Values
-//! arrive as arguments; side effects arrive as traits the caller implements.
+//! Every decision; no interface, no ambient configuration.
 
 pub mod clock;
 pub mod error;

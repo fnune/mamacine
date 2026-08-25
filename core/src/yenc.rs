@@ -1,7 +1,6 @@
-//! Decoding yEnc, the encoding every usenet binary arrives in. Forty lines, versus a dependency.
+//! yEnc decoding, forty lines versus a dependency.
 
-/// The bytes between `=ybegin` and `=yend`, decoded. Anything malformed decodes to what it can:
-/// the caller treats the result as evidence, never as the file itself.
+/// Malformed input decodes to what it can.
 pub fn decode(article: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(article.len());
     let mut inside = false;
@@ -20,7 +19,6 @@ pub fn decode(article: &[u8]) -> Vec<u8> {
         if !inside {
             continue;
         }
-        // NNTP dot-stuffing: a line starting ".." carried a line starting "."
         let line = if line.starts_with(b"..") {
             &line[1..]
         } else {
@@ -41,7 +39,7 @@ pub fn decode(article: &[u8]) -> Vec<u8> {
     out
 }
 
-/// The inverse, for tests: real encoders escape more eagerly, decoders must not care.
+/// The inverse, for tests.
 pub fn encode(data: &[u8]) -> Vec<u8> {
     let mut out = b"=ybegin line=128 size=0 name=test\r\n".to_vec();
     for byte in data {

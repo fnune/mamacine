@@ -1,7 +1,4 @@
-//! Driving nzbget: the part of Usenet nobody should reimplement.
-//!
-//! It runs as a private instance with its own config, its own port and its own random control
-//! password, and it is the only thing here that knows about NNTP, yEnc, par2 or unpacking.
+//! Driving nzbget, as a private instance.
 
 use crate::error::{Error, Result};
 use crate::http::{expect_success, HttpClient, Request};
@@ -38,11 +35,11 @@ pub struct HistoryItem {
     pub size_mb: i64,
     pub total_articles: i64,
     pub failed_articles: i64,
-    /// Reported by nzbget in tenths of a percent.
+    /// nzbget reports tenths of a percent.
     pub health_percent: f64,
 }
 
-/// nzbget's own vocabulary, which is not the vocabulary of the person watching.
+/// nzbget's vocabulary, not the person's.
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
@@ -80,21 +77,17 @@ pub trait Downloader: Send + Sync {
     fn download_rate(&self) -> Result<u64>;
     fn cancel(&self, id: i64) -> Result<()>;
     fn forget(&self, id: i64) -> Result<()>;
-    /// Whether the news server behind the downloads answers and accepts the account. Tells a run
-    /// of dead copies apart from a broken account, which look identical from the failures alone.
+    /// Tells dead copies from a broken account.
     fn check_server(&self, news: &NewsServer) -> ServerCheck;
 }
 
-/// What asking the news server came to. The two failures call for different actions — a refused
-/// account needs the settings fixed, a dead connection needs waiting — and `Unknown` means the
-/// question could not be asked, which must never be reported as an answer: the day this mattered,
-/// an "Invalid parameters" error in our own call was read as a broken server and killed a film.
+/// The two failures call for different actions.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerCheck {
     Working,
-    /// The server answered and rejected the account: nothing works until the settings change.
+    /// Rejected the account: fix the settings.
     Refused(String),
-    /// The server could not be reached: transient, and worth retrying on its own.
+    /// Transient: worth retrying on its own.
     Unreachable(String),
     Unknown,
 }
@@ -170,9 +163,6 @@ impl<H: HttpClient> Downloader for NzbgetRpc<H> {
             false,
             "",
             0,
-            // The app decides what she already has, by looking at her folder. nzbget's own idea of
-            // a duplicate is "a name in my history", which includes everything that failed: it
-            // answered a retry of a dead copy with "you already have this".
             "FORCE",
             []
         ]);
@@ -221,10 +211,6 @@ impl<H: HttpClient> Downloader for NzbgetRpc<H> {
                 HistoryItem {
                     id: number(item, "NZBID"),
                     name: text(item, "Name"),
-                    // `WARNING/*` is not a failure. A copy that lost a few articles and was put
-                    // back together by par2, or that arrived at 98% health with room to spare over
-                    // the critical floor, lands here. Reading only `SUCCESS` threw those away and
-                    // started the whole film again.
                     succeeded: status.starts_with("SUCCESS") || status.starts_with("WARNING"),
                     status,
                     directory: Some(directory).filter(|value| !value.is_empty()),
@@ -261,10 +247,6 @@ impl<H: HttpClient> Downloader for NzbgetRpc<H> {
         .map(|_| ())
     }
 
-    /// nzbget's own `testserver` call: it opens a connection to the news server and logs in, which
-    /// is the one test that exercises the same path a download does. Verified against nzbget 26.2:
-    /// eight parameters (the last is the certificate verification level, 0 matching CertCheck=no),
-    /// success is an empty result, and failures come back as prose in the result.
     fn check_server(&self, news: &NewsServer) -> ServerCheck {
         let params = serde_json::json!([
             news.host,
@@ -288,14 +270,12 @@ impl<H: HttpClient> Downloader for NzbgetRpc<H> {
                     ServerCheck::Unreachable(text)
                 }
             }
-            // any error here is about our call or about nzbget itself, not about the news server:
-            // nothing was learned, and "unknown" must never be reported as an answer
             Err(_) => ServerCheck::Unknown,
         }
     }
 }
 
-/// Written to disk with owner-only permissions: it carries the news server password.
+/// Carries the news password; written owner-only.
 pub fn render_config(
     settings: &Settings,
     work: &Path,
@@ -376,7 +356,7 @@ fn render_server(index: u8, news: &NewsServer) -> String {
     )
 }
 
-/// The external programs nzbget needs, shipped beside the app on Windows.
+/// Programs nzbget needs, shipped on Windows.
 #[derive(Clone, Debug)]
 pub struct Tools {
     pub nzbget: std::path::PathBuf,
@@ -459,7 +439,6 @@ mod tests {
 
     #[test]
     fn cleans_up_the_archives_after_unpacking() {
-        // it defaults to no, which left a full set of rar volumes beside every finished film
         assert!(config().contains("UnpackCleanupDisk=yes"));
     }
 
@@ -525,9 +504,6 @@ mod tests {
         );
     }
 
-    // A season came down at 98.7% health against a critical floor of 89.9%, was filed
-    // `WARNING/HEALTH`, and was thrown away because the status did not begin with SUCCESS. The
-    // whole film started again, from nothing, twice.
     #[test]
     fn a_copy_that_finished_with_a_warning_is_a_copy_she_has() {
         let rpc = NzbgetRpc::new(
@@ -543,21 +519,13 @@ mod tests {
         assert!(rpc.history().expect("history").remove(0).succeeded);
     }
 
-    // par2 volumes were downloaded and then parked: nothing ever repaired the 71 missing parts,
-    // and the copy was discarded for damage that was sitting there fixable.
     #[test]
     fn the_configuration_always_repairs_what_it_can() {
         assert!(config().contains("ParCheck=force"), "{}", config());
         assert!(config().contains("ParRepair=yes"), "{}", config());
-        // obfuscated releases arrive as .x01/.x02: without this there is nothing to unpack, so
-        // nzbget finds no damage to repair and files a broken folder as finished
         assert!(config().contains("DirectRename=yes"), "{}", config());
     }
 
-    // nzbget looks for its own web interface next to its own executable, and on Windows that is
-    // a copy of it in a folder of ours with nothing else in it. Nobody ever opens that interface
-    // — the app is the interface — so the folder is not made; saying so keeps an ERROR out of the
-    // log that reads like the reason a start failed and is nothing of the kind.
     #[test]
     fn it_is_not_asked_for_a_web_interface_that_nobody_opens() {
         assert!(config().contains("\nWebDir=\n"), "{}", config());
@@ -568,8 +536,6 @@ mod tests {
         assert!(config().contains("DupeCheck=no"), "{}", config());
     }
 
-    // nzbget's default pauses at 250MB free, when the disk is already unusable; pausing earlier
-    // leaves the machine something to live on, and the pause itself is shown as "En pausa".
     #[test]
     fn downloads_pause_before_the_disk_is_actually_full() {
         assert!(config().contains("DiskSpace=4000"), "{}", config());
@@ -622,8 +588,6 @@ mod tests {
         assert!(matches!(rpc.queue(), Err(Error::Refused { .. })));
     }
 
-    // The shapes below are nzbget 26.2's real answers, captured live: success is an empty
-    // result, and both failures arrive as prose in the result rather than as errors.
     #[test]
     fn the_two_ways_a_server_fails_are_told_apart_because_they_need_different_actions() {
         let working = NzbgetRpc::new(
@@ -674,8 +638,6 @@ mod tests {
         ));
     }
 
-    // The day this mattered: nzbget answered {"code":2,"message":"Invalid parameters"} about our
-    // own call, the app read it as a broken server, and a film was abandoned over it.
     #[test]
     fn an_unaskable_question_is_never_reported_as_an_answer() {
         let silent = NzbgetRpc::new(1, "x", FakeHttp::answering(vec![]));

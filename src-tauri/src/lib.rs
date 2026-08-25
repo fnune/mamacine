@@ -1,7 +1,3 @@
-//! The composition root. This is the only file that knows which concrete implementation is which,
-//! and the only file that reads configuration from disk. Every decision lives in `orchestrator`,
-//! where it can be tested; a command here is a lookup and a delegation, nothing more.
-
 mod disk;
 mod finishing;
 mod library;
@@ -10,11 +6,13 @@ mod messages;
 mod orchestrator;
 mod settings_file;
 mod supervisor;
+mod text;
 
 use finishing::Finisher;
 use library::Library;
 use log::Log;
 use mamacine_core::clock::SystemClock;
+use mamacine_core::http::Throttle;
 use mamacine_core::indexer::{Indexer, Newznab};
 use mamacine_core::lookup::{Lookup, Suggestion};
 use mamacine_core::net::Network;
@@ -28,23 +26,27 @@ use std::sync::{Arc, Mutex, RwLock};
 use supervisor::Nzbget;
 use tauri::{Manager, State};
 use tauri_plugin_notification::NotificationExt;
+use text::Lang;
 
-/// Everything that is rebuilt when the settings change: the private nzbget, the clients that
-/// carry credentials, and the orchestrator that ties them together. The library and the log
-/// live outside it, so nothing she has is forgotten by pressing Guardar.
 struct Runtime {
     orchestrator: Arc<Orchestrator>,
     finisher: Arc<Finisher>,
     nzbget: Mutex<Nzbget>,
+    subtitles: Arc<OpenSubtitles<Throttle<Network>, SystemClock>>,
+    subtitle_settings: mamacine_core::settings::SubtitleSettings,
+}
+
+fn polite(floor_ms: u64) -> Throttle<Network> {
+    Throttle::new(Network::new(), std::time::Duration::from_millis(floor_ms))
 }
 
 pub struct App {
     runtime: RwLock<Option<Runtime>>,
-    /// Why there is no runtime, in her words, when there is none.
     problem: RwLock<Option<String>>,
     library: Arc<Library>,
     log: Arc<Log>,
     network: Network,
+    lang: RwLock<Lang>,
 }
 
 impl App {
@@ -71,14 +73,14 @@ impl App {
             .read()
             .expect("not poisoned")
             .clone()
-            .unwrap_or_else(|| "La aplicación no ha terminado de arrancar.".to_string())
+            .unwrap_or_else(|| self.lang().still_starting().to_string())
+    }
+
+    fn lang(&self) -> Lang {
+        *self.lang.read().expect("not poisoned")
     }
 }
 
-/// Anything that waits on the network, a process or the disk belongs off the main thread. A
-/// synchronous command runs on it, and the window cannot draw while one is in progress: a search
-/// would freeze the very spinner meant to cover it, and the once-a-second progress poll would
-/// stutter every scroll.
 async fn off_thread<T: Send + 'static>(
     work: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -86,8 +88,6 @@ async fn off_thread<T: Send + 'static>(
         .await
         .map_err(|failure| failure.to_string())?
 }
-
-// --- searching -------------------------------------------------------------------
 
 #[tauri::command]
 async fn search(
@@ -104,8 +104,6 @@ async fn search(
     .await
 }
 
-/// What a tapped suggestion means: resolved here because only the provider knows how to turn its
-/// own id into a query the indexer can answer.
 #[tauri::command]
 async fn pick_suggestion(
     app: State<'_, Arc<App>>,
@@ -141,8 +139,6 @@ async fn have(
     off_thread(move || Ok(app.orchestrator()?.have(index, series))).await
 }
 
-// --- downloading -----------------------------------------------------------------
-
 #[tauri::command]
 async fn grab(
     app: State<'_, Arc<App>>,
@@ -166,7 +162,6 @@ async fn progress(app: State<'_, Arc<App>>) -> Result<Progress, String> {
     let app = app.inner().clone();
     off_thread(move || match app.orchestrator() {
         Ok(orchestrator) => Ok(orchestrator.progress()),
-        // no downloader, but her films are still hers, and the reason is still sayable
         Err(problem) => Ok(Progress {
             active: Vec::new(),
             finished: Vec::new(),
@@ -195,7 +190,6 @@ async fn progress(app: State<'_, Arc<App>>) -> Result<Progress, String> {
     .await
 }
 
-/// The give-up screen's button: carry on with the copies kept beyond the chase limit.
 #[tauri::command]
 async fn try_more(app: State<'_, Arc<App>>, id: i64) -> Result<Grabbed, String> {
     let app = app.inner().clone();
@@ -208,14 +202,12 @@ async fn cancel(app: State<'_, Arc<App>>, id: i64) -> Result<(), String> {
     off_thread(move || app.orchestrator()?.cancel(id)).await
 }
 
-// --- her films -------------------------------------------------------------------
-
 #[tauri::command]
 async fn play(app: State<'_, Arc<App>>, id: i64) -> Result<(), String> {
     let app = app.inner().clone();
     off_thread(move || {
         let film = app.orchestrator()?.film_file(id)?;
-        open_with_desktop(&film.display().to_string())
+        open_with_desktop(&film.display().to_string(), app.lang())
     })
     .await
 }
@@ -234,7 +226,7 @@ async fn play_episode(app: State<'_, Arc<App>>, id: i64, position: usize) -> Res
     let app = app.inner().clone();
     off_thread(move || {
         let episode = app.orchestrator()?.episode_file(id, position)?;
-        open_with_desktop(&episode.display().to_string())
+        open_with_desktop(&episode.display().to_string(), app.lang())
     })
     .await
 }
@@ -244,7 +236,7 @@ async fn reveal(app: State<'_, Arc<App>>, id: i64) -> Result<(), String> {
     let app = app.inner().clone();
     off_thread(move || {
         let folder = app.orchestrator()?.folder_of(id)?;
-        open_with_desktop(&folder.display().to_string())
+        open_with_desktop(&folder.display().to_string(), app.lang())
     })
     .await
 }
@@ -267,45 +259,41 @@ async fn cover(app: State<'_, Arc<App>>, url: String) -> Result<String, String> 
     off_thread(move || app.orchestrator()?.image(&url)).await
 }
 
-/// What the film is about, for the ficha. An empty answer means the film database has no words
-/// for it, or there is no database configured; the screen stands without it either way.
 #[tauri::command]
 async fn synopsis(app: State<'_, Arc<App>>, index: usize) -> Result<String, String> {
     let app = app.inner().clone();
     off_thread(move || app.orchestrator()?.synopsis(index)).await
 }
 
-/// The same words for something already on her shelf, which has no place in the search results
-/// to be asked about.
 #[tauri::command]
 async fn library_synopsis(app: State<'_, Arc<App>>, id: i64) -> Result<String, String> {
     let app = app.inner().clone();
     off_thread(move || app.orchestrator()?.library_synopsis(id)).await
 }
 
-/// Built here from the film's own id rather than taken from the window, so the only page this can
-/// ever open is the one for a film in the results.
 #[tauri::command]
 async fn open_imdb(app: State<'_, Arc<App>>, index: usize) -> Result<(), String> {
     let app = app.inner().clone();
     off_thread(move || {
         let id = app.orchestrator()?.imdb_of(index)?;
         let id = id.trim_start_matches('0');
-        open_with_desktop(&format!("https://www.imdb.com/title/tt{id:0>7}/"))
+        open_with_desktop(
+            &format!("https://www.imdb.com/title/tt{id:0>7}/"),
+            app.lang(),
+        )
     })
     .await
 }
 
-/// A season has no page of its own; the show's episode list, opened at that season, is the nearest
-/// thing IMDb keeps.
 #[tauri::command]
 async fn open_imdb_season(app: State<'_, Arc<App>>, index: usize) -> Result<(), String> {
     let app = app.inner().clone();
     off_thread(move || {
         let (id, season) = app.orchestrator()?.imdb_season_of(index)?;
-        open_with_desktop(&format!(
-            "https://www.imdb.com/title/{id}/episodes?season={season}"
-        ))
+        open_with_desktop(
+            &format!("https://www.imdb.com/title/{id}/episodes?season={season}"),
+            app.lang(),
+        )
     })
     .await
 }
@@ -319,9 +307,6 @@ async fn season_episodes(
     off_thread(move || app.orchestrator()?.season_episodes(index)).await
 }
 
-// --- settings --------------------------------------------------------------------
-
-/// Never sends a password back to the window: it says whether one is set, not what it is.
 #[derive(Serialize)]
 pub struct SettingsView {
     indexers: Vec<settings_file::StoredIndexer>,
@@ -338,12 +323,12 @@ pub struct SettingsView {
     subtitles_password_set: bool,
     destination: String,
     language: String,
+    ui_language: String,
+    app_language: &'static str,
     autostart: bool,
     keep_running: bool,
     ready: bool,
-    /// Where all of this lives, so the screen can name the file it offers to open.
     settings_path: String,
-    /// The same, for the log: a failure that says "look at the log" has to say where it is.
     log_path: String,
 }
 
@@ -378,24 +363,24 @@ fn view_of(handle: &tauri::AppHandle, stored: &settings_file::StoredSettings) ->
             .map(|path| path.display().to_string())
             .unwrap_or_default(),
         language: stored.language.clone(),
+        ui_language: stored.ui_language.clone(),
+        app_language: settings_file::ui_language_of(stored).code(),
         autostart: stored.autostart,
         keep_running: stored.keep_running,
     }
 }
 
-/// Asks the desktop for a folder. Typing a path is a thing to get wrong, and she would.
-///
-/// Asynchronous on purpose: a synchronous command runs on the main thread, and the blocking form of
-/// this dialog waits for the main loop to show it. The app hangs waiting for itself.
 #[tauri::command]
 async fn choose_folder(handle: tauri::AppHandle) -> Option<String> {
     use tauri_plugin_dialog::DialogExt;
+
+    let lang = settings_file::ui_language_of(&settings_file::read(&handle));
 
     let (sender, receiver) = std::sync::mpsc::channel();
     handle
         .dialog()
         .file()
-        .set_title("Dónde guardar las películas")
+        .set_title(lang.where_to_save_films())
         .pick_folder(move |folder| {
             let _ = sender.send(folder);
         });
@@ -414,9 +399,6 @@ fn read_settings(handle: tauri::AppHandle) -> SettingsView {
     view_of(&handle, &stored)
 }
 
-/// Opens the settings file itself, for the one person who will ever want it: whoever set the app
-/// up for her. Written out first when it is not there yet, because the first run has nothing on
-/// disk and "no pasa nada" is the worst answer a button can give.
 #[tauri::command]
 async fn open_settings_file(handle: tauri::AppHandle) -> Result<(), String> {
     off_thread(move || {
@@ -425,19 +407,18 @@ async fn open_settings_file(handle: tauri::AppHandle) -> Result<(), String> {
             let stored = settings_file::read(&handle);
             settings_file::write(&handle, &stored).map_err(|failure| failure.to_string())?;
         }
-        open_with_desktop(&path.display().to_string())
+        let lang = settings_file::ui_language_of(&settings_file::read(&handle));
+        open_with_desktop(&path.display().to_string(), lang)
     })
     .await
 }
 
-/// The log, and the folder it shares with nzbget's own log. Both are offered: reading it is one
-/// thing, and sending it to whoever can fix this is another, and that needs the folder.
 #[tauri::command]
 async fn open_log_file(app: State<'_, Arc<App>>) -> Result<(), String> {
     let app = app.inner().clone();
     off_thread(move || {
         app.log.line("the log was opened from the settings screen");
-        open_with_desktop(&app.log.path().display().to_string())
+        open_with_desktop(&app.log.path().display().to_string(), app.lang())
     })
     .await
 }
@@ -445,12 +426,9 @@ async fn open_log_file(app: State<'_, Arc<App>>) -> Result<(), String> {
 #[tauri::command]
 async fn open_log_folder(app: State<'_, Arc<App>>) -> Result<(), String> {
     let app = app.inner().clone();
-    off_thread(move || open_with_desktop(&app.log.folder().display().to_string())).await
+    off_thread(move || open_with_desktop(&app.log.folder().display().to_string(), app.lang())).await
 }
 
-/// Writes the file and then rebuilds the running app on it, because settings that only take
-/// effect after a restart are settings that lie: the screen used to say "ya se puede buscar"
-/// while the running app still held the old credentials.
 #[tauri::command]
 async fn save_settings(
     handle: tauri::AppHandle,
@@ -466,9 +444,8 @@ async fn save_settings(
         sync_autostart(&handle, &app, stored.autostart);
         if stored != before {
             rebuild(&handle, &app);
-            // saying "guardado" while the app failed to start on these settings would be a lie
             if let Some(problem) = app.problem.read().expect("not poisoned").clone() {
-                return Err(format!("Se ha guardado, pero hay un problema: {problem}"));
+                return Err(app.lang().saved_but(&problem));
             }
         }
         Ok(view_of(&handle, &stored))
@@ -476,8 +453,6 @@ async fn save_settings(
     .await
 }
 
-/// Checks the values as typed, not whatever happened to be loaded at startup: the old check
-/// validated the credentials that had just been replaced.
 #[tauri::command]
 async fn check_settings(
     handle: tauri::AppHandle,
@@ -488,6 +463,7 @@ async fn check_settings(
     off_thread(move || {
         let mut stored = settings_file::read(&handle);
         settings_file::apply(&mut stored, &incoming);
+        let lang = settings_file::ui_language_of(&stored);
         let mut lines = Vec::new();
 
         let usable: Vec<&settings_file::StoredIndexer> = stored
@@ -496,7 +472,7 @@ async fn check_settings(
             .filter(|indexer| indexer.enabled && !indexer.url.trim().is_empty())
             .collect();
         if usable.is_empty() {
-            lines.push("Buscadores: no hay ninguno configurado.".to_string());
+            lines.push(lang.check_no_indexer().to_string());
         }
         for indexer in usable {
             let client = Newznab::new(
@@ -506,65 +482,55 @@ async fn check_settings(
                     api_key: indexer.key.trim().to_string(),
                     enabled: true,
                 },
-                Network::new(),
+                polite(500),
                 SystemClock,
             );
             let name = if indexer.name.is_empty() {
-                "Buscador"
+                lang.check_indexer_fallback_name()
             } else {
                 &indexer.name
             };
             match client.capabilities() {
-                Ok(_) => lines.push(format!("{name}: funciona.")),
-                Err(failure) => {
-                    lines.push(format!("{name}: {}", messages::explain(&failure).said))
-                }
+                Ok(_) => lines.push(lang.check_works(name)),
+                Err(failure) => lines.push(format!(
+                    "{name}: {}",
+                    messages::explain(&failure, lang).said
+                )),
             }
         }
 
         let news = settings_file::news_of(&stored);
         if news.host.trim().is_empty() {
-            lines.push("Servidor de descargas: falta la dirección.".to_string());
+            lines.push(lang.check_news_missing_host().to_string());
         } else {
             match app.orchestrator() {
                 Ok(orchestrator) => match orchestrator.downloader.check_server(&news) {
-                    ServerCheck::Working => {
-                        lines.push("Servidor de descargas: funciona.".to_string())
-                    }
+                    ServerCheck::Working => lines.push(lang.check_news_works().to_string()),
                     ServerCheck::Refused(reason) => {
                         app.log.line(&format!("check news server: {reason}"));
-                        lines.push(
-                            "Servidor de descargas: ha rechazado el usuario o la contraseña."
-                                .to_string(),
-                        );
+                        lines.push(lang.check_news_refused().to_string());
                     }
                     ServerCheck::Unreachable(reason) => {
                         app.log.line(&format!("check news server: {reason}"));
-                        lines.push(
-                            "Servidor de descargas: no se puede conectar. Revisa la dirección, o puede que no haya internet."
-                                .to_string(),
-                        );
+                        lines.push(lang.check_news_unreachable().to_string());
                     }
-                    ServerCheck::Unknown => lines.push(
-                        "Servidor de descargas: no se ha podido comprobar ahora mismo.".to_string(),
-                    ),
+                    ServerCheck::Unknown => lines.push(lang.check_news_unknown().to_string()),
                 },
-                Err(problem) => lines.push(format!("Servidor de descargas: {problem}")),
+                Err(problem) => lines.push(lang.check_news_prefix(&problem)),
             }
         }
 
         if !stored.tmdb_key.trim().is_empty() {
             let tmdb = Tmdb::new(
                 stored.tmdb_key.trim().to_string(),
-                "es-ES".into(),
-                Network::new(),
+                settings_file::tmdb_language_of(&stored, &settings_file::system_language().1),
+                polite(250),
             );
             match tmdb.check() {
-                Ok(()) => lines.push("Fichas de películas: funciona.".to_string()),
-                Err(failure) => lines.push(format!(
-                    "Fichas de películas: {}",
-                    messages::explain(&failure).said
-                )),
+                Ok(()) => lines.push(lang.check_metadata_works().to_string()),
+                Err(failure) => {
+                    lines.push(lang.check_metadata_prefix(&messages::explain(&failure, lang).said))
+                }
             }
         }
 
@@ -572,23 +538,31 @@ async fn check_settings(
             &stored,
             std::path::PathBuf::from("."),
             std::path::PathBuf::from("."),
+            &settings_file::system_language().0,
         )
         .subtitles;
         if subtitles.can_download() {
-            let service = OpenSubtitles::new(subtitles, Network::new(), SystemClock);
-            match service.check_account() {
-                Ok(()) => lines.push("Subtítulos: funciona.".to_string()),
+            let running = app
+                .runtime
+                .read()
+                .expect("not poisoned")
+                .as_ref()
+                .filter(|runtime| runtime.subtitle_settings == subtitles)
+                .map(|runtime| Arc::clone(&runtime.subtitles));
+            let checked = match running {
+                Some(service) => service.check_account(),
+                None => OpenSubtitles::new(subtitles, polite(500), SystemClock).check_account(),
+            };
+            match checked {
+                Ok(()) => lines.push(lang.check_subtitles_works().to_string()),
                 Err(failure) => {
-                    lines.push(format!("Subtítulos: {}", messages::explain(&failure).said))
+                    lines.push(lang.check_subtitles_prefix(&messages::explain(&failure, lang).said))
                 }
             }
         } else if subtitles.can_search() {
-            lines.push(
-                "Subtítulos: falta el usuario o la contraseña, así que no se pueden descargar."
-                    .to_string(),
-            );
+            lines.push(lang.check_subtitles_no_account().to_string());
         } else {
-            lines.push("Subtítulos: sin configurar. La aplicación funciona igual.".to_string());
+            lines.push(lang.check_subtitles_unconfigured().to_string());
         }
 
         Ok(lines.join("\n"))
@@ -596,17 +570,9 @@ async fn check_settings(
     .await
 }
 
-// --- the desktop -----------------------------------------------------------------
-
-/// Hands the path to the desktop and stays long enough to hear a refusal. The openers exit
-/// almost at once, naming a code when no handler could be launched; swallowing that code was the
-/// app's one silent catch, and "nothing at all happens" was how it looked from the sofa. A
-/// handler that is still running after the grace period is a player doing its job.
-fn open_with_desktop(path: &str) -> Result<(), String> {
+fn open_with_desktop(path: &str, lang: Lang) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     let mut command = {
-        // explorer rather than `cmd /C start`: cmd re-parses its line, and a folder with `&` in
-        // its name would cut the command in half
         let mut command = std::process::Command::new("explorer");
         command.arg(path);
         command
@@ -624,20 +590,13 @@ fn open_with_desktop(path: &str) -> Result<(), String> {
         command
     };
     let mut child = command.spawn().map_err(|failure| failure.to_string())?;
-    // explorer.exe answers 1 whether or not it opened anything, so on Windows the only thing its
-    // code can produce is a false alarm on every successful open
     if cfg!(target_os = "windows") {
         return Ok(());
     }
     for _ in 0..40 {
         match child.try_wait() {
             Ok(Some(status)) if status.success() => return Ok(()),
-            Ok(Some(status)) => {
-                return Err(format!(
-                    "El ordenador no ha podido abrirlo (error {}).",
-                    status.code().unwrap_or(-1)
-                ))
-            }
+            Ok(Some(status)) => return Err(lang.could_not_open_it(status.code().unwrap_or(-1))),
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(50)),
             Err(failure) => return Err(failure.to_string()),
         }
@@ -645,20 +604,14 @@ fn open_with_desktop(path: &str) -> Result<(), String> {
     Ok(())
 }
 
-// --- the tray and the desktop's own switches ---------------------------------------
-
-/// The app lives by the clock: the window is a view of it, not the app itself. Closing the view
-/// keeps the downloads going when she asked for that, and this icon is the way back in.
 fn build_tray(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 
-    // a tray tooltip is a Windows idea and Linux ignores it, so the same status is also the top
-    // line of the menu, where every desktop shows it
     let status = MenuItem::with_id(handle, "status", "Mamá Cine", false, None::<&str>)?;
-    let open = MenuItem::with_id(handle, "open", "Abrir Mamá Cine", true, None::<&str>)?;
-    // honest about the cost: leaving entirely is what stops a download halfway
-    let quit = MenuItem::with_id(handle, "quit", "Salir del todo", true, None::<&str>)?;
+    let lang = settings_file::ui_language_of(&settings_file::read(handle));
+    let open = MenuItem::with_id(handle, "open", lang.open_the_app(), true, None::<&str>)?;
+    let quit = MenuItem::with_id(handle, "quit", lang.quit_entirely(), true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(handle)?;
     let menu = Menu::with_items(handle, &[&status, &separator, &open, &quit])?;
 
@@ -712,8 +665,6 @@ fn quit_entirely(handle: &tauri::AppHandle) {
     handle.exit(0);
 }
 
-/// Tells the operating system whether to open the app with the computer. The OS entry is derived
-/// state: re-asserted from the setting on every start and every save, never migrated.
 fn sync_autostart(handle: &tauri::AppHandle, app: &App, wanted: bool) {
     use tauri_plugin_autostart::ManagerExt;
     let autolaunch = handle.autolaunch();
@@ -732,19 +683,24 @@ fn sync_autostart(handle: &tauri::AppHandle, app: &App, wanted: bool) {
     }
 }
 
-// --- building the runtime --------------------------------------------------------
-
-fn build_runtime(handle: &tauri::AppHandle, app: &App) -> Result<Runtime, String> {
+fn build_runtime(
+    handle: &tauri::AppHandle,
+    app: &App,
+    previous: Option<&Runtime>,
+) -> Result<Runtime, String> {
     let stored = settings_file::read(handle);
+    let lang = settings_file::ui_language_of(&stored);
+    *app.lang.write().expect("not poisoned") = lang;
     let settings = settings_file::load(handle)
-        .map_err(|failure| messages::explain(&failure_of(failure)).said)?;
+        .map_err(|failure| messages::explain(&failure_of(failure), lang).said)?;
     let tools = settings_file::tools(handle);
 
-    let nzbget = Nzbget::start(&settings, &tools, &app.network, &app.log).map_err(|failure| {
-        let explained = messages::explain(&failure);
-        app.log.line(&explained.why);
-        explained.said
-    })?;
+    let nzbget =
+        Nzbget::start(&settings, &tools, &app.network, &app.log, lang).map_err(|failure| {
+            let explained = messages::explain(&failure, lang);
+            app.log.line(&explained.why);
+            explained.said
+        })?;
     let downloader = NzbgetRpc::new(nzbget.port, &nzbget.password, Network::new());
     let indexers: Vec<(String, Box<dyn Indexer>)> = settings
         .indexers
@@ -753,13 +709,12 @@ fn build_runtime(handle: &tauri::AppHandle, app: &App) -> Result<Runtime, String
         .map(|indexer| {
             (
                 indexer.name.clone(),
-                Box::new(Newznab::new(indexer.clone(), Network::new(), SystemClock))
+                Box::new(Newznab::new(indexer.clone(), polite(500), SystemClock))
                     as Box<dyn Indexer>,
             )
         })
         .collect();
 
-    // what she has is what is on the disk; anything remembered otherwise is corrected here
     app.library.reconcile(&settings.destination);
 
     let notify = |handle: tauri::AppHandle| -> orchestrator::Notify {
@@ -773,22 +728,28 @@ fn build_runtime(handle: &tauri::AppHandle, app: &App) -> Result<Runtime, String
         })
     };
 
+    let subtitles = match previous {
+        Some(old) if old.subtitle_settings == settings.subtitles => Arc::clone(&old.subtitles),
+        _ => Arc::new(OpenSubtitles::new(
+            settings.subtitles.clone(),
+            polite(500),
+            SystemClock,
+        )),
+    };
+
     let finisher = Arc::new(Finisher {
         downloader: Box::new(NzbgetRpc::new(
             nzbget.port,
             &nzbget.password,
             Network::new(),
         )),
-        subtitles: Box::new(OpenSubtitles::new(
-            settings.subtitles.clone(),
-            Network::new(),
-            SystemClock,
-        )),
+        subtitles: subtitles.clone(),
         library: Arc::clone(&app.library),
         log: Arc::clone(&app.log),
         language: settings.subtitles.language.clone(),
         remover: Arc::new(orchestrator::SystemRemover),
         notify: notify(handle.clone()),
+        lang,
     });
 
     let orchestrator = Arc::new(Orchestrator::new(Pieces {
@@ -803,28 +764,28 @@ fn build_runtime(handle: &tauri::AppHandle, app: &App) -> Result<Runtime, String
         disk: Box::new(orchestrator::SystemDisk),
         remover: Box::new(orchestrator::SystemRemover),
         prober: Box::new(mamacine_core::nntp::NntpProbe),
-        // TMDB when a key is set: titles in her language, the original named outright.
-        // The keyless IMDb lookup otherwise, so the app works out of the box.
         suggestions: if stored.tmdb_key.trim().is_empty() {
             Box::new(orchestrator::Keyless::new(
-                Lookup::new(Network::new()),
-                TvMaze::new(Network::new()),
+                Lookup::new(polite(500)),
+                TvMaze::new(polite(500)),
             ))
         } else {
             Box::new(Tmdb::new(
                 stored.tmdb_key.trim().to_string(),
-                // the language the interface itself speaks
-                "es-ES".into(),
-                Network::new(),
+                settings_file::tmdb_language_of(&stored, &settings_file::system_language().1),
+                polite(250),
             ))
         },
         notify: notify(handle.clone()),
+        lang,
     }));
 
     Ok(Runtime {
         orchestrator,
         finisher,
         nzbget: Mutex::new(nzbget),
+        subtitles,
+        subtitle_settings: settings.subtitles.clone(),
     })
 }
 
@@ -832,24 +793,21 @@ fn failure_of(failure: Box<dyn std::error::Error>) -> mamacine_core::error::Erro
     mamacine_core::error::Error::Setup(failure.to_string())
 }
 
-/// Tears the old runtime down and builds a new one on the settings as they now are.
 fn rebuild(handle: &tauri::AppHandle, app: &App) {
     let old = app.runtime.write().expect("not poisoned").take();
-    if let Some(runtime) = old {
+    if let Some(runtime) = &old {
         runtime
             .nzbget
             .lock()
             .expect("not poisoned")
             .stop(&app.network);
     }
-    // her records could not be used (a downgrade): downloading against a library that may not
-    // remember what arrives would quietly orphan films, so the reason is surfaced instead
     if let Some(problem) = app.library.problem() {
         app.log.line(&format!("runtime not built: {problem}"));
         *app.problem.write().expect("not poisoned") = Some(problem);
         return;
     }
-    match build_runtime(handle, app) {
+    match build_runtime(handle, app, old.as_ref()) {
         Ok(runtime) => {
             *app.runtime.write().expect("not poisoned") = Some(runtime);
             *app.problem.write().expect("not poisoned") = None;
@@ -864,10 +822,7 @@ fn rebuild(handle: &tauri::AppHandle, app: &App) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        // registered first, as its docs require: a second launch would race a second nzbget onto
-        // the same queue directory
         .plugin(tauri_plugin_single_instance::init(|handle, _args, _cwd| {
-            // the window may be tucked into the tray: launching again means "show it to me"
             show_window(handle);
         }))
         .plugin(tauri_plugin_dialog::init())
@@ -886,32 +841,28 @@ pub fn run() {
                 tauri_app.package_info().version,
                 state.display()
             ));
-            // a panic on a worker thread went to a stderr that a Windows app does not have, so
-            // the app simply stopped doing something and the reason was nowhere
             let panics = Arc::clone(&log);
             let previously = std::panic::take_hook();
             std::panic::set_hook(Box::new(move |panic| {
                 panics.line(&format!("panic: {panic}"));
                 previously(panic);
             }));
-            let library = Arc::new(Library::open(&state, Arc::clone(&log)));
+            let lang = settings_file::ui_language_of(&settings_file::read(&handle));
+            let library = Arc::new(Library::open(&state, Arc::clone(&log), lang));
             let app = Arc::new(App {
                 runtime: RwLock::new(None),
                 problem: RwLock::new(None),
                 library,
                 log,
                 network: Network::new(),
+                lang: RwLock::new(lang),
             });
 
-            // built off the main thread: nzbget takes seconds to answer, and a window that
-            // appears late looks like an app that did not start
             let building = Arc::clone(&app);
             let build_handle = handle.clone();
             std::thread::spawn(move || {
                 rebuild(&build_handle, &building);
 
-                // a copy that turns out to be dead is replaced by the next one without her doing
-                // anything: on usenet the first copy failing is ordinary, not an error to hand over
                 let chasing = Arc::clone(&building);
                 std::thread::spawn(move || loop {
                     if let Ok(orchestrator) = chasing.orchestrator() {
@@ -919,7 +870,6 @@ pub fn run() {
                     }
                     std::thread::sleep(std::time::Duration::from_secs(4));
                 });
-                // the finishing work runs on its own thread so a slow probe never stalls the window
                 let finishing = building;
                 std::thread::spawn(move || loop {
                     if let Ok(finisher) = finishing.finisher() {
@@ -932,7 +882,6 @@ pub fn run() {
             handle.manage(Arc::clone(&app));
             let status = build_tray(&handle)?;
 
-            // the tray answers "how is it going?" without opening the window
             let tray_app = Arc::clone(&app);
             let tray_handle = handle.clone();
             std::thread::spawn(move || loop {
@@ -952,8 +901,6 @@ pub fn run() {
             tauri::WindowEvent::CloseRequested { api, .. } => {
                 let handle = window.app_handle().clone();
                 if settings_file::read(&handle).keep_running {
-                    // closing the view is not stopping the work: the app tucks itself in by
-                    // the clock, and says so when something is actually still coming down
                     api.prevent_close();
                     let _ = window.hide();
                     std::thread::spawn(move || {
@@ -972,8 +919,8 @@ pub fn run() {
                             let _ = handle
                                 .notification()
                                 .builder()
-                                .title("Mamá Cine sigue descargando")
-                                .body("Se queda en el icono pequeño junto al reloj y avisará cuando la película esté lista.")
+                                .title(app.lang().keeps_downloading_title())
+                                .body(app.lang().keeps_downloading_body())
                                 .show();
                         }
                     });
@@ -981,7 +928,6 @@ pub fn run() {
             }
             tauri::WindowEvent::Destroyed => {
                 if let Some(app) = window.try_state::<Arc<App>>() {
-                    // leaving nzbget running would hold the port and keep downloading unseen
                     if let Some(runtime) = app.runtime.write().expect("not poisoned").take() {
                         runtime
                             .nzbget

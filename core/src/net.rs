@@ -1,4 +1,4 @@
-//! The one place a real socket is opened. Everything else takes an `HttpClient`.
+//! The only place opening real sockets.
 
 use crate::error::{Error, Result};
 use crate::http::{HttpClient, Method, Request, Response};
@@ -40,7 +40,6 @@ impl HttpClient for Network {
             None => call.call(),
         };
 
-        // a refusal is an answer, not a failure to reach: let the caller phrase it
         let response = match outcome {
             Ok(response) => response,
             Err(ureq::Error::Status(_, response)) => response,

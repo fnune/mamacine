@@ -1,4 +1,4 @@
-//! One error type, carrying enough context to say what was attempted and what refused.
+//! Errors carry what was attempted and refused.
 
 use std::fmt;
 
@@ -15,12 +15,12 @@ pub enum Error {
         status: u16,
         message: String,
     },
-    /// The service answered with something we could not read.
+    /// Answered with something unreadable.
     Unreadable {
         what: String,
         detail: String,
     },
-    /// Something the person using the app has to fix, phrased for them.
+    /// Something the person must fix, phrased plainly.
     Setup(String),
     Io(std::io::Error),
 }

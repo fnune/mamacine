@@ -1,20 +1,14 @@
-//! Asking the news server what still exists, before downloading anything.
-//!
-//! NNTP's `STAT` answers "is this article there?" without transferring a body, and `BODY` on a
-//! par2 index file — kilobytes — reveals what the repair set can actually repair. Together they
-//! answer in seconds what nzbget can only prove by downloading gigabytes.
+//! Asking the news server what still exists.
 
 use crate::error::{Error, Result};
 use crate::settings::NewsServer;
 use std::io::{BufRead, BufReader, Read, Write};
 
-/// The questions the chase asks the news server directly. Behind a trait so a test never opens
-/// a socket, and so the chase can be handed a fake that answers instantly.
+/// The chase's direct questions to the server.
 pub trait Prober: Send + Sync {
-    /// For each article, whether the server no longer has it. May return fewer answers than
-    /// asked when the verdict became certain early; the answers given are in order.
+    /// Whether each article is gone; stops early.
     fn statuses(&self, news: &NewsServer, ids: &[&str]) -> Result<Vec<bool>>;
-    /// One article's decoded body: how a par2 index is read without downloading the release.
+    /// One article's decoded body.
     fn fetch_body(&self, news: &NewsServer, id: &str) -> Result<Vec<u8>>;
 }
 
@@ -32,7 +26,6 @@ impl Prober for NntpProbe {
     }
 }
 
-/// Read and Write together, so TLS and plain sockets walk through the same conversations.
 trait Wire: Read + Write {}
 impl<T: Read + Write> Wire for T {}
 
@@ -74,7 +67,6 @@ fn connect(news: &NewsServer) -> Result<Box<dyn Wire>> {
     Ok(Box::new(rustls::StreamOwned::new(connection, tcp)))
 }
 
-/// Bytes rather than text: article bodies are binary, and a text read would choke on them.
 fn read_line<S: Read>(reader: &mut BufReader<S>, news: &NewsServer) -> Result<Vec<u8>> {
     let mut line = Vec::new();
     reader
@@ -128,9 +120,6 @@ fn handshake<S: Read + Write>(reader: &mut BufReader<S>, news: &NewsServer) -> R
     Ok(())
 }
 
-/// The STAT conversation, over any stream, so the whole exchange is testable with a script.
-/// Pipelined in batches: three hundred sequential round trips took a minute against a real
-/// server, while a batch of commands costs one.
 fn stat_conversation<S: Read + Write>(
     stream: S,
     news: &NewsServer,
@@ -164,16 +153,12 @@ fn stat_conversation<S: Read + Write>(
                 statuses.push(true);
                 missing += 1;
             } else {
-                // an answer we do not understand poisons the estimate: better no answer than a
-                // wrong one, since the caller falls back to nzbget's slow certainty
                 return Err(Error::Unreadable {
                     what: news.host.clone(),
                     detail: format!("STAT: {}", String::from_utf8_lossy(&answer)),
                 });
             }
         }
-        // a fifth of the sample gone exceeds any real par2 coverage: the verdict cannot change,
-        // so the rest of the sample is not worth the server's time
         if statuses.len() >= 60 && missing as f64 / statuses.len() as f64 >= 0.2 {
             let _ = write!(reader.get_mut(), "QUIT\r\n");
             return Ok(statuses);
@@ -183,8 +168,6 @@ fn stat_conversation<S: Read + Write>(
     Ok(statuses)
 }
 
-/// One article, decoded. A refusal here is an ordinary answer — the index may simply be gone —
-/// and the caller treats it as "no evidence" rather than a verdict.
 fn body_conversation<S: Read + Write>(stream: S, news: &NewsServer, id: &str) -> Result<Vec<u8>> {
     let mut reader = BufReader::new(stream);
     handshake(&mut reader, news)?;
@@ -207,7 +190,6 @@ fn body_conversation<S: Read + Write>(stream: S, news: &NewsServer, id: &str) ->
             break;
         }
         if body.len() > 4 * 1024 * 1024 {
-            // an "index" this size is not an index; stop before it becomes a download
             return Err(Error::Unreadable {
                 what: news.host.clone(),
                 detail: "article too large for an index".into(),
@@ -224,7 +206,6 @@ fn body_conversation<S: Read + Write>(stream: S, news: &NewsServer, id: &str) ->
 mod tests {
     use super::*;
 
-    /// A scripted server: hands out canned bytes, records everything said to it.
     struct Script {
         answers: std::io::Cursor<Vec<u8>>,
         said: Vec<u8>,
@@ -312,13 +293,10 @@ mod tests {
         assert!(stat_conversation(&mut script, &news(), &["a@x"]).is_err());
     }
 
-    // The copy that ate the morning was 100% scrubbed: sixty answers said so, and asking the
-    // remaining two hundred and forty would have been the server's time for nothing.
     #[test]
     fn certainty_ends_the_conversation_early() {
         let mut lines = vec!["200 ready", "381 ok", "281 in"];
         lines.extend(std::iter::repeat_n("430 gone", 60));
-        // deliberately no answers beyond the first batch: needing them would fail the read
         let mut script = Script::answering(&lines);
         let ids: Vec<String> = (0..300).map(|n| format!("id-{n}@x")).collect();
         let borrowed: Vec<&str> = ids.iter().map(String::as_str).collect();
@@ -338,8 +316,6 @@ mod tests {
 
     #[test]
     fn a_body_is_fetched_and_decoded_from_its_yenc_wrapping() {
-        // assembled as bytes: yEnc is binary, and a string detour would mangle it — which is
-        // the very reason the conversation reads bytes
         let mut wire = b"200 ready\r\n381 ok\r\n281 in\r\n222 0 <par@x> body follows\r\n".to_vec();
         wire.extend(crate::yenc::encode(b"PAR2 evidence bytes"));
         wire.extend(b".\r\n");

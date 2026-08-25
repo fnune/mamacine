@@ -29,10 +29,8 @@
 
       nativeBuildInputsFor = pkgs: [ pkgs.pkg-config ];
 
-      # What the core crate needs. No browser engine: it has no interface.
       buildInputsFor = pkgs: [ pkgs.openssl ];
 
-      # Only the window and its tray icon need these.
       desktopInputsFor = pkgs: [
         pkgs.gdk-pixbuf
         pkgs.glib
@@ -44,7 +42,6 @@
         pkgs.webkitgtk_4_1
       ];
 
-      # The programs the app drives. On Windows they travel with it as sidecars.
       toolsFor = pkgs: [ pkgs.ffmpeg-headless pkgs.nzbget pkgs.p7zip pkgs.unrar ];
     in
     {
@@ -57,10 +54,6 @@
             ++ desktopInputsFor pkgs
             ++ toolsFor pkgs;
 
-          # The webview and its dependencies are loaded by name at runtime, so they have to be
-          # findable rather than merely linked against. This is deliberately not LD_LIBRARY_PATH:
-          # putting Nix's glibc ahead of the host's for every subprocess breaks host tools such as
-          # git. `just dev` applies it to the app process alone.
           shellHook = ''
             export MAMACINE_LIBRARY_PATH="${pkgs.lib.makeLibraryPath (desktopInputsFor pkgs)}"
             export GIO_MODULE_DIR="${pkgs.glib-networking}/lib/gio/modules"

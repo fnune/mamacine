@@ -1,18 +1,12 @@
-//! How much room is left where her films go, and how big that disk is. The one thing in the app
-//! that has to ask the operating system directly, so it lives here rather than in `core`.
-
 use std::path::Path;
 
 #[derive(Clone, Copy, Debug)]
 pub struct Space {
-    /// Bytes available to this user, which is not the same as bytes unused: filesystems keep a
-    /// margin.
     pub free: u64,
     pub total: u64,
 }
 
 pub fn space(path: &Path) -> Option<Space> {
-    // a folder that does not exist yet still has a filesystem above it
     let mut candidate = path;
     while !candidate.exists() {
         candidate = candidate.parent()?;
@@ -27,11 +21,9 @@ fn measure(path: &Path) -> Option<Space> {
 
     let route = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut stats: libc::statvfs = unsafe { std::mem::zeroed() };
-    // SAFETY: the path is a valid C string and the struct is ours to fill
     if unsafe { libc::statvfs(route.as_ptr(), &mut stats) } != 0 {
         return None;
     }
-    // these fields are not the same width on every unix, so the conversion is not always a no-op
     #[allow(clippy::useless_conversion)]
     Some(Space {
         free: u64::from(stats.f_bavail) * u64::from(stats.f_frsize),
@@ -48,7 +40,6 @@ fn measure(path: &Path) -> Option<Space> {
     wide.push(0);
     let mut free_to_caller = 0u64;
     let mut total = 0u64;
-    // SAFETY: the path is null terminated and the output pointers are ours
     let ok = unsafe {
         GetDiskFreeSpaceExW(
             wide.as_ptr(),

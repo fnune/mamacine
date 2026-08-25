@@ -1,42 +1,35 @@
-//! Looking a film up as she types, so a misspelling is a suggestion rather than a dead end.
+//! Suggestions while typing; misspellings still land.
 
 use crate::error::{Error, Result};
 use crate::http::{expect_success, HttpClient, Request};
 use crate::indexer::ShowIds;
 use serde_json::Value;
 
-/// One title offered while she types. `id` belongs to whichever provider offered it; the window
-/// never interprets it, it only hands the suggestion back by position.
+/// One offered title; `id` is the provider's.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Suggestion {
     pub id: String,
-    /// In her language when the provider knows it, else however the provider names it.
+    /// Localized when the provider knows it.
     pub title: String,
-    /// The original title, shown in parentheses beside the other one so two titles of the same
-    /// name can be told apart. Only when the provider states it outright, because guessing at
-    /// originals would put wrong names on the screen, and only when she could read it: "El
-    /// castillo ambulante (ハウルの動く城)" tells her nothing the poster and the year do not.
+    /// Only when stated outright, and readable.
     pub original: Option<String>,
     pub year: Option<String>,
     pub series: bool,
     pub poster_url: Option<String>,
 }
 
-/// A suggestion turned into something searchable: the query the indexer understands, and the
-/// name everything downstream (cards, the shelf, notifications) should call the thing.
+/// A suggestion turned into something searchable.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct Picked {
     pub query: String,
     pub series: bool,
     pub title: String,
-    /// A show as the indexer files it, which is what finds its packs whatever they were named.
-    /// Empty for a film, whose IMDb id is already the query.
+    /// Empty for a film.
     #[serde(skip)]
     pub show: ShowIds,
 }
 
-/// A name she has a chance of reading, and so a name worth putting beside another one. Latin
-/// script survives folding into ASCII; Japanese, Korean and Cyrillic do not.
+/// Latin script survives ASCII folding; others don't.
 pub fn readable(text: &str) -> bool {
     let folded = crate::search::fold(text);
     folded.is_ascii() && folded.chars().any(|letter| letter.is_ascii_alphanumeric())
@@ -66,7 +59,6 @@ impl<H: HttpClient> Lookup<H> {
             "https://v2.sg.media-imdb.com/suggestion/{first}/{}.json",
             encode_path_segment(&query)
         );
-        // the default agent of a scripting library gets a blanket 403 from indexers
         let request = Request::get(url).header("User-Agent", "MamaCine/1.0");
         let response = expect_success("the title lookup", self.http.send(request)?)?;
         let answer: Value =
@@ -78,7 +70,6 @@ impl<H: HttpClient> Lookup<H> {
     }
 
     pub fn poster(&self, url: &str) -> Result<(String, Vec<u8>)> {
-        // fetched here rather than by the page, so only IMDb's own image host is ever contacted
         if !is_imdb_image_url(url) {
             return Err(Error::Setup(
                 "posters must come from IMDb's image host".into(),
@@ -90,8 +81,7 @@ impl<H: HttpClient> Lookup<H> {
     }
 }
 
-/// IMDb's endpoint names one primary title and never says which title is the original, so the
-/// picked name is passed through untranslated and no parentheses are ever claimed.
+/// IMDb never says which title is original.
 pub fn resolve(suggestion: &Suggestion) -> Picked {
     Picked {
         query: if suggestion.series {
@@ -122,8 +112,6 @@ pub fn parse_suggestions(answer: &Value) -> Vec<Suggestion> {
             if !series && !matches!(qid, "movie" | "feature" | "tvMovie" | "short") {
                 return None;
             }
-            // no year means announced and unreleased ("Aegon's Conquest"): nothing on usenet
-            // can satisfy it, so offering it only leads to an empty answer
             let year = item.get("y").and_then(Value::as_i64)?;
             Some(Suggestion {
                 id: imdb,
@@ -150,8 +138,6 @@ fn is_imdb_image_url(url: &str) -> bool {
     host == "media-amazon.com" || host.ends_with(".media-amazon.com")
 }
 
-/// IMDb's endpoint takes the query as a path segment, where a `+` is a literal plus,
-/// so a space must be `%20` and `indexer::encode_component` would corrupt it.
 fn encode_path_segment(value: &str) -> String {
     value
         .bytes()
@@ -233,7 +219,6 @@ mod tests {
         assert!(!resolve(&film).show.any(), "a film is already an id");
     }
 
-    // IMDb never says which title is the original, so this provider must never invent one.
     #[test]
     fn no_original_title_is_ever_claimed_without_a_source_that_states_it() {
         for suggestion in parse_suggestions(&answer()) {
@@ -253,7 +238,6 @@ mod tests {
 
     #[test]
     fn an_announced_title_without_a_year_is_not_offered() {
-        // seen live: "Aegon's Conquest" and "Snow", announced spin-offs nothing can download
         let found = parse_suggestions(&serde_json::json!({"d": [
             {"id": "tt31178266", "l": "Aegon's Conquest", "qid": "movie"},
             {"id": "tt0082096", "l": "Das Boot", "y": 1981, "qid": "movie"}

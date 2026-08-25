@@ -1,8 +1,4 @@
-//! TVMaze, the keyless way from an IMDb id to the ids indexers file television under.
-//!
-//! An indexer answers `tvsearch` by tvdb id, and the keyless IMDb lookup states no such id. TVMaze
-//! does, for free and without a key, which is what lets the app find a show by what it is rather
-//! than by how it happens to be spelled, out of the box and with nothing to configure.
+//! TVMaze: keyless IMDb-to-tvdb id bridge.
 
 use crate::error::{Error, Result};
 use crate::http::{expect_success, HttpClient, Request};
@@ -29,9 +25,7 @@ impl<H: HttpClient> TvMaze<H> {
         self
     }
 
-    /// The rest of a show's ids, from its IMDb id (`tt0944947`). A show TVMaze has never heard of
-    /// is answered with a 404, which is an answer and not a failure: the search then has the name
-    /// and the IMDb id, and asks with those.
+    /// A 404 is an answer, not a failure.
     pub fn ids_for(&self, imdb: &str) -> Result<ShowIds> {
         let known = ShowIds {
             imdb: Some(imdb.to_string()),
@@ -56,12 +50,7 @@ impl<H: HttpClient> TvMaze<H> {
         Ok(parse_ids(&answer, imdb))
     }
 
-    /// The show a name means, for a season she already owns whose search is long gone.
-    ///
-    /// The service answers with the one show it believes the name is, rather than with a list to
-    /// choose from, which is exactly the question being asked: her card already says which show
-    /// this is, and what is missing are its ids. A name it does not recognise is a 404, and that
-    /// is an answer: the episodes stay numbered.
+    /// The one show a name means, with ids.
     pub fn show_named(&self, name: &str) -> Result<ShowIds> {
         let url = format!(
             "{}/singlesearch/shows?q={}",
@@ -87,8 +76,7 @@ impl<H: HttpClient> TvMaze<H> {
         Ok(parse_ids(&answer, imdb))
     }
 
-    /// The episodes of a run of seasons, named. One question answers for the whole show, so the
-    /// second season she opens costs nothing.
+    /// One question answers the whole show.
     pub fn episodes(&self, tvmaze: &str, first: u32, last: u32) -> Result<Vec<Episode>> {
         let url = format!(
             "{}/shows/{}/episodes",
@@ -136,8 +124,6 @@ pub fn parse_episodes(answer: &Value) -> Vec<Episode> {
         .collect()
 }
 
-/// TVMaze writes its summaries as a fragment of a web page. The window shows text, so the tags
-/// come off here rather than being pasted into a screen as `<p>`.
 fn in_plain_words(html: &str) -> String {
     let mut words = String::with_capacity(html.len());
     let mut inside_tag = false;
@@ -196,8 +182,6 @@ mod tests {
         .to_string()
     }
 
-    // Her card carries the name the release used, and one question turns it into the show. The
-    // service answers with the show it believes the name is, which is the question being asked.
     #[test]
     fn a_name_off_her_own_card_becomes_the_show_it_is() {
         let service = service(vec![FakeHttp::status(

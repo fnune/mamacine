@@ -1,18 +1,13 @@
-//! Television, deliberately narrower than film: whole seasons only.
-//!
-//! A season arrives either as one pack or as a dozen separate episode releases. Only packs are
-//! offered here. One download, one folder, one card, and nothing to remember about what she has
-//! already watched. A show whose season has no pack is honestly reported as not available rather
-//! than assembled out of pieces.
+//! Television, whole season packs only.
 
 use crate::indexer::SearchResult;
-use crate::release::{matches, Preference, Tag};
+use crate::release::{matches, names_another_language, Preference, Tag};
 use regex::Regex;
 use std::sync::OnceLock;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Shape {
-    /// One episode, which this module does not offer.
+    /// One episode, never offered here.
     Episode,
     /// A whole season, as one download.
     Season(u32),
@@ -20,27 +15,23 @@ pub enum Shape {
     Seasons(u32, u32),
 }
 
-/// One episode of a season, as the show database names it. `title` is absent when the database
-/// was asked for a whole run of seasons at once and answered with how many episodes each has:
-/// how many there are is worth saying on its own, and a name nobody stated is never invented.
+/// An episode; a name nobody stated stays absent.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
 pub struct Episode {
     pub season: u32,
     pub number: u32,
     pub title: Option<String>,
-    /// What happens in it, where the database says so. The episode's own screen is the one place
-    /// with room for it, and it is the only thing there that says what she is about to watch.
+    /// What happens in it, when known.
     pub overview: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Season {
     pub show: String,
-    pub label: String,
     pub first: u32,
     pub last: u32,
-    /// Best first, the way `films` orders copies of a film.
+    /// Best first, as `films` orders copies.
     pub releases: Vec<SearchResult>,
 }
 
@@ -54,7 +45,7 @@ fn pattern(cell: &'static OnceLock<Regex>, source: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(source).expect("pattern compiles"))
 }
 
-/// What a release is, judged from its name. Scene naming is all the indexer gives us.
+/// What a release is, from its name.
 pub fn shape_of(title: &str) -> Option<Shape> {
     static EPISODE: OnceLock<Regex> = OnceLock::new();
     static RANGE: OnceLock<Regex> = OnceLock::new();
@@ -63,7 +54,6 @@ pub fn shape_of(title: &str) -> Option<Shape> {
 
     let title = title.to_lowercase();
 
-    // an episode marker wins outright: S01E02, S01.EP02, 1x02, or a range within one season
     if pattern(
         &EPISODE,
         r"(?i)\b(s\d{1,2}[\s._-]?ep?\d{1,3}|\d{1,2}x\d{2})\b",
@@ -90,9 +80,7 @@ pub fn shape_of(title: &str) -> Option<Shape> {
     None
 }
 
-/// The season and episode a file belongs to, from its name: `S01E03`, `1x03`, `103` is too
-/// ambiguous to guess at. Used to put a season pack's subtitles beside the right episode instead of
-/// piling every one of them onto whichever episode happens to be the largest file.
+/// Season and episode; bare `103` is ambiguous.
 pub fn episode_of(name: &str) -> Option<(u32, u32)> {
     static MARKED: OnceLock<Regex> = OnceLock::new();
     static CROSSED: OnceLock<Regex> = OnceLock::new();
@@ -104,7 +92,7 @@ pub fn episode_of(name: &str) -> Option<(u32, u32)> {
     Some((found[1].parse().ok()?, found[2].parse().ok()?))
 }
 
-/// The show's own name: whatever comes before the season marker.
+/// Whatever comes before the season marker.
 pub fn show_of(title: &str) -> String {
     static MARKER: OnceLock<Regex> = OnceLock::new();
     let marker = pattern(
@@ -120,9 +108,6 @@ pub fn show_of(title: &str) -> String {
         .filter(|word| !word.is_empty())
         .map(|word| word.to_lowercase())
         .collect();
-    // "Game.of.Thrones.Complete.S01" is not a show called Game Of Thrones Complete, and
-    // "Money.Heist.2017.S01" is not a show called Money Heist 2017: packaging words and release
-    // years before the marker made second, duplicate groups of the same show
     while words.len() > 1 {
         let last = words.last().map(String::as_str).unwrap_or("");
         if matches!(last, "complete" | "completa" | "full" | "collection") || is_year(last) {
@@ -142,8 +127,7 @@ fn is_year(word: &str) -> bool {
 
 const GIGABYTE: f64 = 1_073_741_824.0;
 
-/// A season is many hours, so the same reasoning as a film applies with more room: the smallest
-/// pack that still looks like a season of television.
+/// The smallest pack still looking like television.
 pub fn pack_score(release: &SearchResult, preference: Preference, episodes: f64) -> f64 {
     let title = release.title.to_lowercase();
     let mut score = 0.0;
@@ -151,12 +135,14 @@ pub fn pack_score(release: &SearchResult, preference: Preference, episodes: f64)
     if matches(&release.tags, preference) {
         score += 500.0;
     }
-    if release.tags.contains(&Tag::Spanish) && preference == Preference::Spanish {
-        score += 150.0;
+    if let Preference::Language(code) = preference {
+        if release.tags.contains(&Tag::Dub(code)) {
+            score += 150.0;
+        }
     }
 
     score += if title.contains("2160p") || title.contains("4k") {
-        -120.0 // a season at this size is tens of gigabytes she will not see the benefit of
+        -120.0
     } else if title.contains("1080p") {
         90.0
     } else if title.contains("720p") {
@@ -165,34 +151,33 @@ pub fn pack_score(release: &SearchResult, preference: Preference, episodes: f64)
         0.0
     };
 
-    // about three quarters of a gigabyte an episode is a good television copy
-    let per_episode = (release.size_bytes as f64 / GIGABYTE) / episodes.max(1.0);
-    score += match per_episode {
+    let gigabytes_per_episode = (release.size_bytes as f64 / GIGABYTE) / episodes.max(1.0);
+    score += episode_density_score(gigabytes_per_episode);
+
+    score += crate::films::popularity_score(release.grabs);
+    score -= crate::films::rot_risk(release);
+    score -= crate::films::sideshow(&title);
+    if let Preference::Language(code) = preference {
+        if names_another_language(&release.tags, code) && !release.tags.contains(&Tag::Dub(code)) {
+            score -= 150.0;
+        }
+    }
+    score
+}
+
+/// Best around three quarters of a gigabyte an episode.
+fn episode_density_score(gigabytes_per_episode: f64) -> f64 {
+    match gigabytes_per_episode {
         rate if rate < 0.15 => -260.0,
         rate if rate < 0.3 => 40.0,
         rate if rate <= 1.2 => 220.0,
         rate if rate <= 2.5 => 110.0,
         rate if rate <= 5.0 => -40.0,
         _ => -200.0,
-    };
-
-    score += (f64::from(release.grabs.max(1) as u32).log10() * 40.0).min(140.0);
-    score -= crate::films::rot_risk(release);
-    score -= crate::films::sideshow(&title);
-    if preference == Preference::Spanish
-        && release.tags.contains(&Tag::OtherLanguage)
-        && !release.tags.contains(&Tag::Spanish)
-    {
-        score -= 150.0;
     }
-    score
 }
 
-/// Seasons offered as a single download, newest markers first, best copy of each first.
-/// `named` is the show every result belongs to, which is known exactly when the indexer was asked
-/// by id rather than by name. Then the packs of one season are one card however they were named:
-/// "Money.Heist.S01" and "La.casa.de.papel.S01" are the same season of the same show, and telling
-/// her to choose between them is asking her to answer a question about release naming.
+/// One card per season, however releases named it.
 pub fn group_seasons(
     results: Vec<SearchResult>,
     preference: Preference,
@@ -205,8 +190,7 @@ pub fn group_seasons(
             continue;
         };
         let (first, last) = match shape {
-            Shape::Episode => continue, // offered only as whole seasons
-            // season zero is extras, bloopers and unaired pieces, never an evening of television
+            Shape::Episode => continue,
             Shape::Season(0) => continue,
             Shape::Season(number) => (number, number),
             Shape::Seasons(from, to) => (from, to),
@@ -222,7 +206,6 @@ pub fn group_seasons(
             None => grouped.push((
                 key,
                 Season {
-                    label: label_for(first, last),
                     show: match named {
                         Some(name) => name.to_string(),
                         None => titled(&show),
@@ -237,7 +220,6 @@ pub fn group_seasons(
 
     let mut seasons: Vec<Season> = grouped.into_iter().map(|(_, season)| season).collect();
     for season in &mut seasons {
-        // one pack of several seasons carries proportionally more television
         let episodes = 10.0 * f64::from(season.last - season.first + 1);
         season.releases.sort_by(|left, right| {
             pack_score(right, preference, episodes)
@@ -247,14 +229,6 @@ pub fn group_seasons(
     }
     seasons.sort_by_key(|season| (season.show.clone(), season.first));
     seasons
-}
-
-fn label_for(first: u32, last: u32) -> String {
-    if first == last {
-        format!("Temporada {first}")
-    } else {
-        format!("Temporadas {first} a {last}")
-    }
 }
 
 fn titled(show: &str) -> String {
@@ -328,8 +302,6 @@ mod tests {
         assert_eq!(shape_of("Just.A.Film.2016.1080p.BluRay"), None);
     }
 
-    // NZBGeek answers a Game of Thrones season search with twenty of these, 4 GB each, and every
-    // one of them was offered as a whole season before the marker was taught to read them
     #[test]
     fn an_episode_written_ep_is_still_an_episode() {
         assert_eq!(
@@ -353,7 +325,7 @@ mod tests {
             None,
         );
         assert_eq!(seasons.len(), 1);
-        assert_eq!(seasons[0].label, "Temporada 1");
+        assert_eq!((seasons[0].first, seasons[0].last), (1, 1));
     }
 
     #[test]
@@ -369,7 +341,7 @@ mod tests {
         );
         assert_eq!(seasons.len(), 2, "one card a season, not one a spelling");
         assert_eq!(seasons[0].show, "La casa de papel");
-        assert_eq!(seasons[0].label, "Temporada 1");
+        assert_eq!((seasons[0].first, seasons[0].last), (1, 1));
         assert_eq!(seasons[0].releases.len(), 2);
         assert_eq!(seasons[1].show, "La casa de papel");
     }
@@ -411,11 +383,9 @@ mod tests {
             None,
         );
         assert_eq!(seasons[0].show, "The Sopranos");
-        assert_eq!(seasons[0].label, "Temporada 2");
+        assert_eq!((seasons[0].first, seasons[0].last), (2, 2));
     }
 
-    // Seen against the real Game of Thrones listing: "Game.of.Thrones.Complete.S01" made a
-    // second show called "Game Of Thrones Complete" with its own duplicate Temporada 1 card.
     #[test]
     fn packaging_words_do_not_invent_a_second_show() {
         let seasons = group_seasons(
@@ -431,8 +401,6 @@ mod tests {
         assert_eq!(seasons[0].releases.len(), 2);
     }
 
-    // Seen against the real Money Heist listing: "Money.Heist.2017.S01" beside "Money.Heist.S01"
-    // made four duplicate cards, one per year the releases were stamped with.
     #[test]
     fn a_release_year_does_not_invent_a_second_show() {
         let seasons = group_seasons(
@@ -448,7 +416,6 @@ mod tests {
         assert_eq!(seasons[0].releases.len(), 2);
     }
 
-    // A show whose whole name is a year must keep it: stripping it would leave nothing.
     #[test]
     fn a_show_actually_named_after_a_year_keeps_its_name() {
         assert_eq!(show_of("1923.S01.1080p.WEB-DL"), "1923");

@@ -1,0 +1,30 @@
+name: check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Cache cargo registry and build output
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Install interface test dependencies
+        run: nix develop --command npm ci
+
+      - name: Check
+        run: nix develop --command just check

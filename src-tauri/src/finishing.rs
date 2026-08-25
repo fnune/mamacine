@@ -1,7 +1,5 @@
-//! The work that happens after nzbget says a film has arrived: look inside it, put the subtitles
-//! where a player will find them, and fetch Spanish ones when there are none she can read.
-
 use crate::library::Library;
+use crate::text::Lang;
 use mamacine_core::error::Result;
 use mamacine_core::matroska;
 use mamacine_core::media::{
@@ -14,70 +12,52 @@ use mamacine_core::subtitles::{
 };
 use std::path::{Path, PathBuf};
 
-/// Enough alternatives that a badly timed one is not the end of the evening.
 const ALTERNATIVES: usize = 3;
 
-/// What came of looking. Kept apart so "there are none" is never said about a refusal.
 #[derive(Default)]
 pub struct Outcome {
     pub saved: usize,
     pub mistimed: usize,
     pub refused: Vec<String>,
-    /// The service will not hand out more today. Every episode after this one gets the same
-    /// answer, so the rest of the season stops asking.
     pub spent: bool,
 }
 
 impl Outcome {
-    pub fn describe(&self) -> String {
+    pub fn describe(&self, lang: Lang) -> String {
         if self.saved > 0 {
-            return match self.saved {
-                1 => "Subtítulos en español añadidos".to_string(),
-                saved => format!("Subtítulos en español añadidos a {saved} episodios"),
-            };
+            return lang.subtitles_added(self.saved);
         }
         if self.spent {
-            return ALLOWANCE_GONE.to_string();
+            return lang.allowance_gone().to_string();
         }
         if !self.refused.is_empty() {
-            return "Hay subtítulos, pero ahora mismo no se han podido descargar".to_string();
+            return lang.subtitles_refused().to_string();
         }
         if self.mistimed > 0 {
-            return "Los subtítulos que hay no son de esta copia".to_string();
+            return lang.subtitles_mistimed().to_string();
         }
-        "No hay subtítulos en español para esta copia".to_string()
+        lang.no_subtitles_for_this_copy().to_string()
     }
 }
 
-const ALLOWANCE_GONE: &str = "El servicio de subtítulos no deja descargar más por hoy";
-
-/// The allowance answering, rather than anything about this film: 429 is what the service says
-/// once the day's downloads are gone, and the client says the same thing without asking again.
 fn allowance_gone(failure: &mamacine_core::error::Error) -> bool {
     use mamacine_core::error::Error;
     match failure {
-        Error::Refused { status: 429, .. } => true,
+        Error::Refused { status: 406, .. } | Error::Refused { status: 429, .. } => true,
         Error::Setup(said) => said.contains("allowance"),
         _ => false,
     }
 }
 
-/// What one episode ended up with. The screen is written from these rather than from a count of
-/// what this attempt happened to fetch: an episode that already had subtitles last week still has
-/// them, and saying otherwise is what made "2 de 12" mean nothing.
 pub struct Look {
-    /// Which episode this is, from its name. A film, and a file nobody can number, has none.
     pub episode: Option<u32>,
     pub subtitles: Subtitles,
     pub spent: bool,
 }
 
 pub enum Subtitles {
-    /// It already had them: nothing was asked of anybody.
     Already,
-    /// Fetched just now.
     Fetched,
-    /// Still none, and why, in her words.
     Missing(String),
 }
 
@@ -96,20 +76,16 @@ impl Look {
 
 pub struct Finisher {
     pub downloader: Box<dyn Downloader>,
-    pub subtitles: Box<dyn SubtitleSource>,
+    pub subtitles: std::sync::Arc<dyn SubtitleSource>,
     pub library: std::sync::Arc<Library>,
     pub log: std::sync::Arc<crate::log::Log>,
     pub language: String,
-    /// For the copy a swap leaves behind. Behind the same trait the shelf's Borrar uses, so a
-    /// test never touches a real bin.
+    pub lang: Lang,
     pub remover: std::sync::Arc<dyn crate::orchestrator::Remover>,
-    /// She will not stare at a progress bar for an hour: a finished film calls her back.
     pub notify: crate::orchestrator::Notify,
 }
 
 impl Finisher {
-    /// Runs over anything finished that has not been settled yet. One unreadable file must not take
-    /// the thread down with it: before, a panic here meant nothing was ever finished again.
     pub fn sweep(&self) {
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.sweep_once()));
         if outcome.is_err() {
@@ -126,8 +102,6 @@ impl Finisher {
             if !item.succeeded {
                 continue;
             }
-            // a record she has finished with is not settled again, however succeeded nzbget
-            // still calls the download behind it
             if self
                 .library
                 .get(item.id)
@@ -140,11 +114,6 @@ impl Finisher {
         }
     }
 
-    /// The copy she swapped out, now that the one she swapped it for is really here.
-    ///
-    /// Only now, and only if the new one landed: asked to change a copy because the one she had
-    /// spoke Italian, she must never be left with neither. The old folder goes to the papelera
-    /// rather than being deleted, so a swap she regrets is still recoverable by anyone.
     fn retire_the_copy_it_replaces(&self, id: i64) {
         let Some(replaced) = self.library.get(id).and_then(|entry| entry.replaces) else {
             return;
@@ -158,18 +127,14 @@ impl Finisher {
         else {
             return;
         };
-        // The copy that just landed is never what gets thrown away. Both copies of a film used
-        // to be filed under the film's title, so the new one arrived in the folder of the one it
-        // was replacing and this binned the pair of them: she asked to change the language of a
-        // film and the film went to the papelera. Nothing else that is hers goes either.
         let landed_in = self.library.get(id).and_then(|entry| entry.folder);
-        let shared = landed_in.as_deref() == Some(folder.as_path())
+        let still_hosts_a_film = landed_in.as_deref() == Some(folder.as_path())
             || self.library.all().into_iter().any(|(other, entry)| {
                 other != replaced
                     && entry.settled
                     && entry.folder.as_deref() == Some(folder.as_path())
             });
-        if shared {
+        if still_hosts_a_film {
             self.log.line(&format!(
                 "not binning {}: the copy that replaced {replaced} is in it too",
                 folder.display()
@@ -188,11 +153,10 @@ impl Finisher {
                 });
                 self.library.note(
                     replaced,
-                    "He cambiado esta copia por otra. La anterior está en la papelera.",
+                    self.lang.copy_swapped(),
                     "replaced by a copy she chose",
                 );
             }
-            // she has the new copy either way; a bin that refuses is not worth a screen
             Err(failure) => self.log.line(&format!(
                 "could not bin {} after the swap: {failure}",
                 folder.display()
@@ -219,9 +183,8 @@ impl Finisher {
         self.library.update(item.id, |entry| {
             entry.info = info.clone();
             entry.settled = true;
-            entry.remaining.clear(); // it arrived; the copies behind it are no longer a plan
-            entry.subtitle_note = summarise(&looks, series);
-            // where it landed, so the shelf is a list of files rather than of history rows
+            entry.remaining.clear();
+            entry.subtitle_note = summarise(&looks, series, self.lang);
             entry.folder = Some(directory.to_path_buf());
             entry.file = Some(largest.clone());
             if entry.title.is_empty() {
@@ -232,9 +195,9 @@ impl Finisher {
         self.library.note(
             item.id,
             if series {
-                "Ya está lista. Ábrela para ver los episodios."
+                self.lang.ready_series_note()
             } else {
-                "Ya está lista para ver."
+                self.lang.ready_film_note()
             },
             &format!("{} · {}", item.status, directory.display()),
         );
@@ -242,18 +205,13 @@ impl Finisher {
         (self.notify)(
             if title.is_empty() { &item.name } else { &title },
             if series {
-                "Ya está lista. Abre Mamá Cine para ver los episodios."
+                self.lang.ready_series_notification()
             } else {
-                "Ya está lista para ver en Mamá Cine."
+                self.lang.ready_film_notification()
             },
         );
     }
 
-    /// The pack's own subtitles into place, and then, for every episode still without any she can
-    /// read, one fetched. What each episode ends up with is what every sentence is written from.
-    ///
-    /// A season is a folder of episodes, and every one of them is an evening: before, only the
-    /// largest file was looked at, so nine episodes out of ten arrived with nothing she could read.
     fn look_after(&self, item: &HistoryItem, directory: &Path, series: bool) -> Vec<Look> {
         let videos = if series {
             all_videos(directory)
@@ -270,15 +228,12 @@ impl Finisher {
                     });
                 }
             }
-            // once the day's allowance is gone it is gone for every episode behind this one, and
-            // asking anyway is a refusal apiece: forty-nine of them, the evening this was found
             let spent = looks.iter().any(|look| look.spent);
             looks.push(self.look_at(item, video, series, spent));
         }
         looks
     }
 
-    /// One file: what it already has, and what was fetched for it when it had nothing.
     fn look_at(&self, item: &HistoryItem, video: &Path, series: bool, spent: bool) -> Look {
         let episode = video
             .file_name()
@@ -287,9 +242,7 @@ impl Finisher {
             .map(|(_, episode)| episode);
         let info = self.inspect(video);
         let beside = loose_subtitles(video.parent().unwrap_or(Path::new(".")));
-        // what is already there is the only record of what was fetched before: asking again cost
-        // a download from somebody else's allowance and left a second copy of the same dialogue
-        if info.has_spanish() || subtitle_beside(video, &beside, &self.language) {
+        if info.has_language(&self.language) || subtitle_beside(video, &beside, &self.language) {
             return Look {
                 episode,
                 subtitles: Subtitles::Already,
@@ -299,13 +252,16 @@ impl Finisher {
         if spent {
             return Look {
                 episode,
-                subtitles: Subtitles::Missing(ALLOWANCE_GONE.to_string()),
+                subtitles: Subtitles::Missing(self.lang.allowance_gone().to_string()),
                 spent: true,
             };
         }
-        // one per episode rather than three: a season is ten times the requests, and OpenSubtitles
-        // is somebody else's allowance
-        let wanted = if series { 1 } else { ALTERNATIVES };
+        let one_per_episode = 1;
+        let wanted = if series {
+            one_per_episode
+        } else {
+            ALTERNATIVES
+        };
         match self.fetch_subtitles(video, &info, item, wanted) {
             Ok(outcome) if outcome.saved > 0 => Look {
                 episode,
@@ -315,7 +271,7 @@ impl Finisher {
             Ok(outcome) => Look {
                 episode,
                 spent: outcome.spent,
-                subtitles: Subtitles::Missing(outcome.describe()),
+                subtitles: Subtitles::Missing(outcome.describe(self.lang)),
             },
             Err(failure) => {
                 self.log
@@ -325,29 +281,27 @@ impl Finisher {
                     episode,
                     spent,
                     subtitles: Subtitles::Missing(if spent {
-                        ALLOWANCE_GONE.to_string()
+                        self.lang.allowance_gone().to_string()
                     } else {
-                        "No se han podido buscar subtítulos ahora mismo".to_string()
+                        self.lang.could_not_search_subtitles().to_string()
                     }),
                 }
             }
         }
     }
 
-    /// Looks again for subtitles she asked about, for a film that settled without them. The note
-    /// is replaced by what this attempt found, so the button always answers.
     pub fn refetch_subtitles(&self, id: i64) -> std::result::Result<String, String> {
         let entry = self
             .library
             .get(id)
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())?;
         let folder = entry
             .folder
             .clone()
             .filter(|folder| folder.exists())
-            .ok_or_else(|| "Esa película ya no está en este ordenador.".to_string())?;
+            .ok_or_else(|| self.lang.film_gone_from_computer().to_string())?;
         if all_videos(&folder).is_empty() {
-            return Err("No se encuentra el archivo de la película.".to_string());
+            return Err(self.lang.film_file_missing().to_string());
         }
 
         let item = mamacine_core::nzbget::HistoryItem {
@@ -362,8 +316,8 @@ impl Finisher {
             health_percent: 0.0,
         };
         let looks = self.look_after(&item, &folder, entry.series);
-        let note = summarise(&looks, entry.series);
-        let said = changed(&looks, entry.series);
+        let note = summarise(&looks, entry.series, self.lang);
+        let said = changed(&looks, entry.series, self.lang);
         self.library
             .update(id, |entry| entry.subtitle_note = note.clone());
         self.library.note(id, &said, "subtitles refetched by hand");
@@ -405,8 +359,9 @@ impl Finisher {
             },
         );
 
-        // an exact match is already timed to this file, so alternatives would only waste allowance
-        let wanted = if ranked.first().map(|best| best.candidate.hash_match) == Some(true) {
+        let already_timed_to_this_file =
+            ranked.first().map(|best| best.candidate.hash_match) == Some(true);
+        let wanted = if already_timed_to_this_file {
             1
         } else {
             wanted
@@ -422,30 +377,27 @@ impl Finisher {
         wanted: usize,
     ) -> Result<Outcome> {
         let mut outcome = Outcome::default();
-        let mut seen: Vec<(Option<i64>, String)> = Vec::new();
+        let mut takes_of_one_timing: Vec<(Option<i64>, String)> = Vec::new();
 
         for candidate in ranked {
             if outcome.saved >= wanted {
                 break;
             }
-            // three copies of one timing is no fallback at all
-            let signature = (
+            let same_take = (
                 candidate.candidate.uploader,
                 candidate.candidate.release.clone(),
             );
-            if seen.contains(&signature) {
+            if takes_of_one_timing.contains(&same_take) {
                 continue;
             }
-            seen.push(signature);
+            takes_of_one_timing.push(same_take);
 
-            // a refusal here is not the same as nothing existing, and must never be reported as one
             let mut content = match self.subtitles.download(candidate.candidate.file_id) {
                 Ok(content) => content,
                 Err(failure) => {
                     self.log
                         .line(&format!("subtitle download refused: {failure}"));
                     outcome.refused.push(failure.to_string());
-                    // the allowance refuses the second candidate exactly as it refused the first
                     if allowance_gone(&failure) {
                         outcome.spent = true;
                         break;
@@ -460,7 +412,7 @@ impl Finisher {
                 check_timing(&content, info.duration_seconds),
                 Timing::Plausible
             ) {
-                outcome.mistimed += 1; // timed for another cut, and unwatchable against this one
+                outcome.mistimed += 1;
                 continue;
             }
 
@@ -523,9 +475,6 @@ fn has_suffix(path: &Path, suffixes: &[&str]) -> bool {
         .unwrap_or(false)
 }
 
-/// Read from the file's own header rather than by running a program, so nothing has to ship one.
-/// Matroska writes what we need before any of the video; an MP4 may keep it at either end, so
-/// both ends are read.
 pub fn inspect(video: &Path) -> MediaInfo {
     use std::io::{Read, Seek, SeekFrom};
     const HEADER: usize = 4 * 1024 * 1024;
@@ -565,7 +514,6 @@ pub fn inspect(video: &Path) -> MediaInfo {
     mamacine_core::mp4::read_header(&front, &tail)
 }
 
-/// Every episode in the folder, in the order they are named, which is the order they are watched.
 pub fn all_videos(directory: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = files_in(directory)
         .into_iter()
@@ -575,9 +523,6 @@ pub fn all_videos(directory: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// Which of the pack's subtitles belong beside this episode. A film takes all of them; a season
-/// takes only the ones marked with its own episode number, so that ten subtitle files are not all
-/// renamed onto whichever episode happens to be the largest.
 fn belonging_to(video: &Path, subtitles: &[PathBuf], series: bool) -> Vec<PathBuf> {
     use mamacine_core::series::episode_of;
     if !series {
@@ -588,7 +533,7 @@ fn belonging_to(video: &Path, subtitles: &[PathBuf], series: bool) -> Vec<PathBu
         .and_then(|name| name.to_str())
         .and_then(episode_of)
     else {
-        return Vec::new(); // an unnamed episode: better nothing than somebody else's dialogue
+        return Vec::new();
     };
     subtitles
         .iter()
@@ -603,10 +548,7 @@ fn belonging_to(video: &Path, subtitles: &[PathBuf], series: bool) -> Vec<PathBu
         .collect()
 }
 
-/// What the shelf says about a folder of episodes. "Sin subtítulos en español en 2 de 12
-/// episodios" named no episode and offered nothing to do about it, and the number was not even
-/// true: it counted the downloads this attempt failed to make, not the episodes without subtitles.
-fn summarise(looks: &[Look], series: bool) -> String {
+fn summarise(looks: &[Look], series: bool, lang: Lang) -> String {
     let missing: Vec<&Look> = looks
         .iter()
         .filter(|look| look.missing().is_some())
@@ -614,32 +556,21 @@ fn summarise(looks: &[Look], series: bool) -> String {
     if missing.is_empty() {
         return match looks.len() {
             0 => String::new(),
-            1 => "Subtítulos en español listos".to_string(),
-            _ => "Subtítulos en español en todos los episodios".to_string(),
+            1 => lang.subtitles_ready().to_string(),
+            _ => lang.subtitles_on_every_episode().to_string(),
         };
     }
     if !series || looks.len() == 1 {
         return missing[0].missing().unwrap_or_default().to_string();
     }
     match numbered(&missing) {
-        // naming ten of them is a paragraph; the list of episodes says which
-        Some(episodes) if episodes.len() <= 3 => {
-            format!("Faltan los subtítulos {}", of_episodes(&episodes))
-        }
-        _ if missing.len() == looks.len() => {
-            format!("Faltan los subtítulos de los {} episodios", looks.len())
-        }
-        _ => format!(
-            "Faltan los subtítulos de {} episodios de {}",
-            missing.len(),
-            looks.len()
-        ),
+        Some(episodes) if episodes.len() <= 3 => lang.subtitles_missing_for(&episodes),
+        _ if missing.len() == looks.len() => lang.subtitles_missing_for_all(looks.len()),
+        _ => lang.subtitles_missing_count(missing.len(), looks.len()),
     }
 }
 
-/// What the button answers: what this attempt changed, which is the one thing the screen does not
-/// already say. Saying the same sentence back was what made it feel like nothing had happened.
-fn changed(looks: &[Look], series: bool) -> String {
+fn changed(looks: &[Look], series: bool, lang: Lang) -> String {
     let fetched: Vec<&Look> = looks.iter().filter(|look| look.fetched()).collect();
     let missing: Vec<&Look> = looks
         .iter()
@@ -649,66 +580,29 @@ fn changed(looks: &[Look], series: bool) -> String {
 
     if !series || looks.len() == 1 {
         return match (fetched.is_empty(), missing.first()) {
-            (false, _) => "Ya están los subtítulos en español.".to_string(),
+            (false, _) => lang.subtitles_already_there().to_string(),
             (true, Some(look)) => format!("{}.", look.missing().unwrap_or_default()),
-            (true, None) => "Ya estaban los subtítulos en español.".to_string(),
+            (true, None) => lang.subtitles_were_already_there().to_string(),
         };
     }
     let phrase = |looks: &[&Look]| match numbered(looks) {
-        Some(episodes) if episodes.len() <= 3 => of_episodes(&episodes),
-        _ => format!("de {} episodios", looks.len()),
+        Some(episodes) if episodes.len() <= 3 => lang.of_episodes(&episodes),
+        _ => lang.of_count_episodes(looks.len()),
     };
     match (fetched.is_empty(), missing.is_empty()) {
-        (true, true) => "Ya estaban todos los subtítulos.".to_string(),
-        (false, true) => "Ya están todos los subtítulos.".to_string(),
-        (false, false) => format!(
-            "Ya están los subtítulos {}. Todavía faltan los {}.",
-            phrase(&fetched),
-            phrase(&missing)
-        ),
-        (true, false) if spent => {
-            format!("{ALLOWANCE_GONE}. Mañana se puede volver a intentar.")
-        }
-        (true, false) => format!(
-            "No hay subtítulos en español para {}. Puede que aparezcan más adelante.",
-            match numbered(&missing) {
-                Some(episodes) if episodes.len() <= 3 => the_episodes(&episodes),
-                _ => format!("{} episodios", missing.len()),
-            }
-        ),
+        (true, true) => lang.all_subtitles_already_there().to_string(),
+        (false, true) => lang.all_subtitles_there_now().to_string(),
+        (false, false) => lang.subtitles_fetched_and_missing(&phrase(&fetched), &phrase(&missing)),
+        (true, false) if spent => lang.allowance_gone_try_tomorrow(),
+        (true, false) => lang.no_subtitles_found_for(&match numbered(&missing) {
+            Some(episodes) if episodes.len() <= 3 => lang.the_episodes(&episodes),
+            _ => lang.count_episodes(missing.len()),
+        }),
     }
 }
 
-/// Their episode numbers, or nothing at all if any of them cannot be numbered: half a list is
-/// worse than a count, because the episodes it leaves out are the ones she would go looking for.
 fn numbered(looks: &[&Look]) -> Option<Vec<u32>> {
     looks.iter().map(|look| look.episode).collect()
-}
-
-/// "del episodio 4", "de los episodios 4 y 7".
-fn of_episodes(episodes: &[u32]) -> String {
-    match episodes {
-        [only] => format!("del episodio {only}"),
-        _ => format!("de los episodios {}", list(episodes)),
-    }
-}
-
-/// "el episodio 4", "los episodios 4 y 7".
-fn the_episodes(episodes: &[u32]) -> String {
-    match episodes {
-        [only] => format!("el episodio {only}"),
-        _ => format!("los episodios {}", list(episodes)),
-    }
-}
-
-/// "4", "4 y 7", "4, 7 y 9".
-fn list(episodes: &[u32]) -> String {
-    let said: Vec<String> = episodes.iter().map(u32::to_string).collect();
-    match said.split_last() {
-        Some((last, [])) => last.clone(),
-        Some((last, rest)) => format!("{} y {last}", rest.join(", ")),
-        None => String::new(),
-    }
 }
 
 pub fn largest_video(directory: &Path) -> Option<PathBuf> {
@@ -718,14 +612,8 @@ pub fn largest_video(directory: &Path) -> Option<PathBuf> {
         .max_by_key(|path| path.metadata().map(|data| data.len()).unwrap_or(0))
 }
 
-/// Whether this episode has subtitles she can read: one beside it, or one inside it. The one
-/// beside it is checked first, because reading a header costs a seek and a file named after the
-/// episode is the answer nine times out of ten.
-///
-/// The screen that lists the episodes is where "which one" is worth answering, and the answer has
-/// to be what is on the disk now rather than what one attempt happened to find once.
 pub fn has_subtitles(video: &Path, beside: &[PathBuf], language: &str) -> bool {
-    subtitle_beside(video, beside, language) || inspect(video).has_spanish()
+    subtitle_beside(video, beside, language) || inspect(video).has_language(language)
 }
 
 pub fn subtitles_in(directory: &Path) -> Vec<PathBuf> {
@@ -808,6 +696,113 @@ mod tests {
         }
     }
 
+    use mamacine_core::subtitles::Candidate;
+
+    struct Answering {
+        candidates: Vec<Candidate>,
+        allowance: Option<usize>,
+        finds: std::sync::Mutex<usize>,
+        asked: std::sync::Mutex<Vec<i64>>,
+    }
+
+    impl Answering {
+        fn holding(candidates: Vec<Candidate>) -> Self {
+            Answering {
+                candidates,
+                allowance: None,
+                finds: std::sync::Mutex::new(0),
+                asked: std::sync::Mutex::new(Vec::new()),
+            }
+        }
+
+        fn finds(&self) -> usize {
+            *self.finds.lock().expect("not poisoned")
+        }
+
+        fn asked(&self) -> Vec<i64> {
+            self.asked.lock().expect("not poisoned").clone()
+        }
+    }
+
+    impl SubtitleSource for Answering {
+        fn find(&self, _: &SubtitleQuery) -> Result<Vec<Candidate>> {
+            *self.finds.lock().expect("not poisoned") += 1;
+            Ok(self.candidates.clone())
+        }
+
+        fn download(&self, file_id: i64) -> Result<Vec<u8>> {
+            let mut asked = self.asked.lock().expect("not poisoned");
+            asked.push(file_id);
+            if self.allowance.map(|limit| asked.len() > limit) == Some(true) {
+                return Err(mamacine_core::error::Error::Refused {
+                    what: "opensubtitles".into(),
+                    status: 406,
+                    message: "quota reached".into(),
+                });
+            }
+            Ok(format!("1\n00:00:01,000 --> 00:00:02,000\nHola {file_id}\n").into_bytes())
+        }
+
+        fn downloads_remaining(&self) -> Option<i64> {
+            None
+        }
+    }
+
+    fn candidate(file_id: i64, uploader: i64) -> Candidate {
+        Candidate {
+            file_id,
+            release: format!("Release.{uploader}"),
+            hash_match: false,
+            fps: None,
+            downloads: 100,
+            rating: 0.0,
+            trusted: false,
+            machine_translated: false,
+            foreign_parts_only: false,
+            uploader: Some(uploader),
+        }
+    }
+
+    fn arrived(id: i64) -> HistoryItem {
+        HistoryItem {
+            id,
+            name: "arrived".into(),
+            succeeded: true,
+            status: "SUCCESS/ALL".into(),
+            directory: None,
+            size_mb: 1,
+            total_articles: 1,
+            failed_articles: 0,
+            health_percent: 100.0,
+        }
+    }
+
+    fn world(
+        name: &str,
+        subtitles: std::sync::Arc<dyn SubtitleSource>,
+    ) -> (PathBuf, std::sync::Arc<Library>, Finisher) {
+        let directory = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&directory);
+        std::fs::create_dir_all(&directory).expect("a scratch folder");
+        let log = std::sync::Arc::new(crate::log::Log::open(&directory));
+        let library = std::sync::Arc::new(Library::open(
+            &directory,
+            std::sync::Arc::clone(&log),
+            Lang::Es,
+        ));
+        let finisher = Finisher {
+            downloader: Box::new(Silent),
+            subtitles,
+            library: std::sync::Arc::clone(&library),
+            log,
+            language: "es".into(),
+            lang: Lang::Es,
+            remover: std::sync::Arc::new(Binned::default()),
+            notify: Box::new(|_, _| {}),
+        };
+        (directory, library, finisher)
+    }
+
     #[derive(Default)]
     struct Binned(std::sync::Mutex<Vec<PathBuf>>);
 
@@ -818,9 +813,6 @@ mod tests {
         }
     }
 
-    // She asked for a copy in another language because the one she had spoke Italian. The old
-    // folder goes, but only once the new one is really here: a swap that fails must leave her
-    // the film she already had, not neither.
     #[test]
     fn the_copy_a_swap_leaves_behind_goes_to_the_bin_only_once_the_new_one_has_landed() {
         let directory = std::env::temp_dir().join("mama-cine-swap-test");
@@ -829,7 +821,11 @@ mod tests {
         std::fs::create_dir_all(&old).expect("the copy she had");
 
         let log = std::sync::Arc::new(crate::log::Log::open(&directory));
-        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        let library = std::sync::Arc::new(Library::open(
+            &directory,
+            std::sync::Arc::clone(&log),
+            Lang::Es,
+        ));
         library.update(1, |entry| {
             entry.title = "La virgen roja".into();
             entry.settled = true;
@@ -843,10 +839,11 @@ mod tests {
         let bin = std::sync::Arc::new(Binned::default());
         let finisher = Finisher {
             downloader: Box::new(Silent),
-            subtitles: Box::new(Silent),
+            subtitles: std::sync::Arc::new(Silent),
             library: std::sync::Arc::clone(&library),
             log,
             language: "es".into(),
+            lang: Lang::Es,
             remover: std::sync::Arc::clone(&bin)
                 as std::sync::Arc<dyn crate::orchestrator::Remover>,
             notify: Box::new(|_, _| {}),
@@ -859,8 +856,6 @@ mod tests {
             std::slice::from_ref(&old)
         );
         assert!(!old.exists());
-        // the record keeps saying where the copy was; what changes is that it is hers no longer,
-        // so nothing settles it again and nothing goes looking for a folder to give it back
         assert!(library.get(1).expect("the old record").retired);
         assert!(!library.get(1).expect("the old record").present());
         assert_eq!(
@@ -873,9 +868,6 @@ mod tests {
         assert_eq!(bin.0.lock().expect("not poisoned").len(), 1);
     }
 
-    // She asked to change the language of a film and the film went to the papelera: both copies
-    // were filed under the film's title, so the replacement landed in the folder of the copy it
-    // was replacing, and binning that folder took the one she had just waited for.
     #[test]
     fn a_swap_never_bins_the_folder_the_new_copy_landed_in() {
         let directory = std::env::temp_dir().join("mama-cine-swap-collide");
@@ -884,7 +876,11 @@ mod tests {
         std::fs::create_dir_all(&shared).expect("the one folder both landed in");
 
         let log = std::sync::Arc::new(crate::log::Log::open(&directory));
-        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        let library = std::sync::Arc::new(Library::open(
+            &directory,
+            std::sync::Arc::clone(&log),
+            Lang::Es,
+        ));
         library.update(1, |entry| {
             entry.settled = true;
             entry.folder = Some(shared.clone());
@@ -898,10 +894,11 @@ mod tests {
         let bin = std::sync::Arc::new(Binned::default());
         let finisher = Finisher {
             downloader: Box::new(Silent),
-            subtitles: Box::new(Silent),
+            subtitles: std::sync::Arc::new(Silent),
             library: std::sync::Arc::clone(&library),
             log,
             language: "es".into(),
+            lang: Lang::Es,
             remover: std::sync::Arc::clone(&bin)
                 as std::sync::Arc<dyn crate::orchestrator::Remover>,
             notify: Box::new(|_, _| {}),
@@ -912,10 +909,6 @@ mod tests {
         assert!(shared.exists(), "the film she waited for is still there");
     }
 
-    // Clearing `settled` to mean "she has not got this" put the record straight back in the
-    // finisher's path: nzbget still calls that download succeeded, so the next sweep settled it
-    // again onto whatever folder its history named, and the record she had just retired came
-    // back pointing at the copy that replaced it.
     #[test]
     fn a_record_she_has_finished_with_is_never_settled_again() {
         let directory = std::env::temp_dir().join("mama-cine-resettle");
@@ -925,7 +918,11 @@ mod tests {
         std::fs::write(landed.join("film.mkv"), b"not really a film").expect("a film");
 
         let log = std::sync::Arc::new(crate::log::Log::open(&directory));
-        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        let library = std::sync::Arc::new(Library::open(
+            &directory,
+            std::sync::Arc::clone(&log),
+            Lang::Es,
+        ));
         library.update(1, |entry| {
             entry.title = "The red virgin".into();
             entry.retired = true;
@@ -971,10 +968,11 @@ mod tests {
 
         let finisher = Finisher {
             downloader: Box::new(Remembers),
-            subtitles: Box::new(Silent),
+            subtitles: std::sync::Arc::new(Silent),
             library: std::sync::Arc::clone(&library),
             log,
             language: "es".into(),
+            lang: Lang::Es,
             remover: std::sync::Arc::new(Binned::default()),
             notify: Box::new(|_, _| {}),
         };
@@ -989,23 +987,27 @@ mod tests {
         assert!(!entry.present());
     }
 
-    // Nothing is thrown away for a download that was never a swap.
     #[test]
     fn an_ordinary_download_bins_nothing() {
         let directory = std::env::temp_dir().join("mama-cine-swap-none");
         let _ = std::fs::remove_dir_all(&directory);
         std::fs::create_dir_all(&directory).expect("a scratch folder");
         let log = std::sync::Arc::new(crate::log::Log::open(&directory));
-        let library = std::sync::Arc::new(Library::open(&directory, std::sync::Arc::clone(&log)));
+        let library = std::sync::Arc::new(Library::open(
+            &directory,
+            std::sync::Arc::clone(&log),
+            Lang::Es,
+        ));
         library.update(9, |entry| entry.title = "El Sur".into());
 
         let bin = std::sync::Arc::new(Binned::default());
         let finisher = Finisher {
             downloader: Box::new(Silent),
-            subtitles: Box::new(Silent),
+            subtitles: std::sync::Arc::new(Silent),
             library,
             log,
             language: "es".into(),
+            lang: Lang::Es,
             remover: std::sync::Arc::clone(&bin)
                 as std::sync::Arc<dyn crate::orchestrator::Remover>,
             notify: Box::new(|_, _| {}),
@@ -1014,8 +1016,6 @@ mod tests {
         assert!(bin.0.lock().expect("not poisoned").is_empty());
     }
 
-    // Before, a season pack's ten subtitle files were all renamed onto whichever episode happened
-    // to be the largest file, and the other nine episodes arrived with nothing to read.
     #[test]
     fn a_seasons_subtitles_go_beside_the_episode_they_belong_to() {
         let subtitles = paths(&[
@@ -1058,7 +1058,7 @@ mod tests {
             look(3, Subtitles::Already),
         ];
         assert_eq!(
-            summarise(&all_fine, true),
+            summarise(&all_fine, true, Lang::Es),
             "Subtítulos en español en todos los episodios"
         );
 
@@ -1068,7 +1068,7 @@ mod tests {
             look(3, Subtitles::Already),
         ];
         assert_eq!(
-            summarise(&one_missing, true),
+            summarise(&one_missing, true, Lang::Es),
             "Faltan los subtítulos del episodio 2"
         );
 
@@ -1078,19 +1078,17 @@ mod tests {
             look(3, Subtitles::Missing("No hay subtítulos".into())),
         ];
         assert_eq!(
-            summarise(&two_missing, true),
+            summarise(&two_missing, true, Lang::Es),
             "Faltan los subtítulos de los episodios 1 y 3"
         );
     }
 
-    // Naming ten of them is a paragraph, and half a list is worse than a count: the episodes it
-    // leaves out are the ones she would go looking for.
     #[test]
     fn a_season_missing_more_than_a_handful_is_counted_instead() {
         let missing = || Subtitles::Missing("No hay subtítulos".into());
         let many: Vec<Look> = (1..=5).map(|number| look(number, missing())).collect();
         assert_eq!(
-            summarise(&many, true),
+            summarise(&many, true, Lang::Es),
             "Faltan los subtítulos de los 5 episodios"
         );
 
@@ -1103,7 +1101,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            summarise(&unnamed, true),
+            summarise(&unnamed, true, Lang::Es),
             "Faltan los subtítulos de los 2 episodios"
         );
     }
@@ -1118,7 +1116,7 @@ mod tests {
             spent: false,
         }];
         assert_eq!(
-            summarise(&refused, false),
+            summarise(&refused, false, Lang::Es),
             "Hay subtítulos, pero ahora mismo no se han podido descargar"
         );
         let fine = vec![Look {
@@ -1126,24 +1124,28 @@ mod tests {
             subtitles: Subtitles::Already,
             spent: false,
         }];
-        assert_eq!(summarise(&fine, false), "Subtítulos en español listos");
+        assert_eq!(
+            summarise(&fine, false, Lang::Es),
+            "Subtítulos en español listos"
+        );
     }
 
-    // The button used to answer with the sentence already on the card, whatever it had just done.
     #[test]
     fn the_button_answers_with_what_it_changed() {
         let missing = || Subtitles::Missing("No hay subtítulos".into());
         assert_eq!(
             changed(
                 &[look(1, Subtitles::Already), look(2, Subtitles::Already)],
-                true
+                true,
+                Lang::Es
             ),
             "Ya estaban todos los subtítulos."
         );
         assert_eq!(
             changed(
                 &[look(1, Subtitles::Already), look(2, Subtitles::Fetched)],
-                true
+                true,
+                Lang::Es
             ),
             "Ya están todos los subtítulos."
         );
@@ -1154,27 +1156,170 @@ mod tests {
                     look(2, missing()),
                     look(3, Subtitles::Already)
                 ],
-                true
+                true,
+                Lang::Es
             ),
             "Ya están los subtítulos del episodio 1. Todavía faltan los del episodio 2."
         );
         assert_eq!(
-            changed(&[look(1, Subtitles::Already), look(2, missing())], true),
+            changed(
+                &[look(1, Subtitles::Already), look(2, missing())],
+                true,
+                Lang::Es
+            ),
             "No hay subtítulos en español para el episodio 2. Puede que aparezcan más adelante."
         );
     }
 
-    // Forty-nine refusals in one evening, one per episode and three times over. What she needs to
-    // know is that it is the service saying no for today, not this season being unsubtitled.
+    #[test]
+    fn a_film_without_spanish_gets_a_subtitle_fetched_and_placed_beside_it() {
+        let source = std::sync::Arc::new(Answering::holding(vec![candidate(7, 1)]));
+        let (directory, _, finisher) =
+            world("mama-cine-fetch-film", std::sync::Arc::clone(&source) as _);
+        let film = directory.join("Das.Boot.1981.mkv");
+        std::fs::write(&film, b"not really a film").expect("a film");
+
+        let looks = finisher.look_after(&arrived(1), &directory, false);
+        assert!(matches!(looks[0].subtitles, Subtitles::Fetched));
+        let beside = std::fs::read_to_string(directory.join("Das.Boot.1981.es.srt"))
+            .expect("the subtitle beside the film");
+        assert!(beside.contains("Hola 7"), "{beside}");
+
+        let again = finisher.look_after(&arrived(1), &directory, false);
+        assert!(matches!(again[0].subtitles, Subtitles::Already));
+        assert_eq!(source.finds(), 1);
+    }
+
+    #[test]
+    fn a_film_keeps_alternatives_and_each_lands_in_its_own_file() {
+        let source = std::sync::Arc::new(Answering::holding(vec![
+            candidate(1, 1),
+            candidate(2, 2),
+            candidate(3, 3),
+            candidate(4, 4),
+        ]));
+        let (directory, _, finisher) = world(
+            "mama-cine-fetch-alternatives",
+            std::sync::Arc::clone(&source) as _,
+        );
+        std::fs::write(directory.join("El.Sur.1983.mkv"), b"not really a film").expect("a film");
+
+        let looks = finisher.look_after(&arrived(1), &directory, false);
+        assert!(matches!(looks[0].subtitles, Subtitles::Fetched));
+        assert_eq!(
+            source.asked().len(),
+            ALTERNATIVES,
+            "the fourth is left for somebody else"
+        );
+        for name in [
+            "El.Sur.1983.es.srt",
+            "El.Sur.1983.es.2.srt",
+            "El.Sur.1983.es.3.srt",
+        ] {
+            assert!(directory.join(name).exists(), "{name} should exist");
+        }
+    }
+
+    #[test]
+    fn an_exact_hash_match_spends_one_download_rather_than_three() {
+        let mut exact = candidate(9, 1);
+        exact.hash_match = true;
+        let source = std::sync::Arc::new(Answering::holding(vec![
+            exact,
+            candidate(2, 2),
+            candidate(3, 3),
+        ]));
+        let (directory, _, finisher) =
+            world("mama-cine-fetch-exact", std::sync::Arc::clone(&source) as _);
+        std::fs::write(directory.join("Volver.2006.mkv"), b"not really a film").expect("a film");
+
+        finisher.look_after(&arrived(1), &directory, false);
+        assert_eq!(source.asked(), vec![9]);
+    }
+
+    #[test]
+    fn the_same_upload_twice_is_skipped_rather_than_saved_twice() {
+        let source = std::sync::Arc::new(Answering::holding(vec![
+            candidate(1, 1),
+            candidate(1, 1),
+            candidate(3, 3),
+        ]));
+        let (directory, _, finisher) = world(
+            "mama-cine-fetch-duplicate",
+            std::sync::Arc::clone(&source) as _,
+        );
+        std::fs::write(directory.join("Tasio.1984.mkv"), b"not really a film").expect("a film");
+
+        finisher.look_after(&arrived(1), &directory, false);
+        assert_eq!(source.asked(), vec![1, 3]);
+    }
+
+    #[test]
+    fn a_season_stops_asking_once_the_allowance_runs_out_mid_way() {
+        let mut source = Answering::holding(vec![candidate(5, 1)]);
+        source.allowance = Some(1);
+        let source = std::sync::Arc::new(source);
+        let (directory, _, finisher) = world(
+            "mama-cine-fetch-season",
+            std::sync::Arc::clone(&source) as _,
+        );
+        for episode in ["Show.S01E01.mkv", "Show.S01E02.mkv", "Show.S01E03.mkv"] {
+            std::fs::write(directory.join(episode), b"not really an episode").expect("an episode");
+        }
+
+        let looks = finisher.look_after(&arrived(1), &directory, true);
+        assert!(matches!(looks[0].subtitles, Subtitles::Fetched));
+        assert_eq!(looks[1].missing(), Some(Lang::Es.allowance_gone()));
+        assert_eq!(looks[2].missing(), Some(Lang::Es.allowance_gone()));
+        assert!(directory.join("Show.S01E01.es.srt").exists());
+        assert!(!directory.join("Show.S01E03.es.srt").exists());
+        assert_eq!(
+            source.finds(),
+            2,
+            "the third episode is never even searched for"
+        );
+        assert_eq!(
+            source.asked().len(),
+            2,
+            "one download and the refusal, nothing more"
+        );
+    }
+
+    #[test]
+    fn the_button_fetches_for_a_film_that_settled_without_subtitles() {
+        let source = std::sync::Arc::new(Answering::holding(vec![candidate(7, 1)]));
+        let (directory, library, finisher) =
+            world("mama-cine-refetch", std::sync::Arc::clone(&source) as _);
+        std::fs::write(
+            directory.join("Cria.Cuervos.1976.mkv"),
+            b"not really a film",
+        )
+        .expect("a film");
+        library.update(3, |entry| {
+            entry.title = "Cría cuervos".into();
+            entry.settled = true;
+            entry.folder = Some(directory.clone());
+            entry.subtitle_note = "No hay subtítulos en español para esta copia".into();
+        });
+
+        let said = finisher.refetch_subtitles(3).expect("an answer");
+        assert_eq!(said, "Ya están los subtítulos en español.");
+        assert!(directory.join("Cria.Cuervos.1976.es.srt").exists());
+        assert_eq!(
+            library.get(3).expect("the record").subtitle_note,
+            "Subtítulos en español listos"
+        );
+    }
+
     #[test]
     fn a_spent_allowance_is_said_as_itself_and_not_as_an_absence() {
         let spent = Look {
             episode: Some(2),
-            subtitles: Subtitles::Missing(ALLOWANCE_GONE.to_string()),
+            subtitles: Subtitles::Missing(Lang::Es.allowance_gone().to_string()),
             spent: true,
         };
         assert_eq!(
-            changed(&[look(1, Subtitles::Already), spent], true),
+            changed(&[look(1, Subtitles::Already), spent], true, Lang::Es),
             "El servicio de subtítulos no deja descargar más por hoy. \
              Mañana se puede volver a intentar."
         );

@@ -1,11 +1,10 @@
-//! Configuration as a value. Built once at the composition root and passed down from there.
+//! Configuration as a value, passed down.
 
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Settings {
-    /// Several, because finding more things means asking more places. One that is misconfigured or
-    /// down is a line in a list, not a broken app.
+    /// Several; one down is not fatal.
     pub indexers: Vec<IndexerSettings>,
     pub news: NewsServer,
     pub subtitles: SubtitleSettings,
@@ -15,7 +14,7 @@ pub struct Settings {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct IndexerSettings {
-    /// What it is called in the settings screen, and what is named when it fails.
+    /// Named in settings and in failures.
     pub name: String,
     pub base_url: String,
     pub api_key: String,
@@ -47,17 +46,17 @@ pub struct NewsServer {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubtitleSettings {
     pub api_key: String,
-    /// Must match the consumer name registered with the service, which enforces it on search.
+    /// Must match the registered consumer name.
     pub user_agent: String,
     pub username: String,
     pub password: String,
     pub language: String,
-    /// Only set in tests, which point it at a fake.
+    /// Only set in tests.
     pub api_base: Option<String>,
 }
 
 impl SubtitleSettings {
-    /// Searching needs only the key; downloading needs the account behind it.
+    /// Searching needs only the key.
     pub fn can_search(&self) -> bool {
         !self.api_key.is_empty()
     }

@@ -1,21 +1,15 @@
-//! Asking several indexers at once and making one list out of the answers.
-//!
-//! More indexers means finding more, not depending on more: one that is down, rate limited or
-//! misconfigured must never take the search with it. What the others found is still an answer, and
-//! what went wrong is reported rather than swallowed.
+//! Several indexers, one list; failures reported.
 
 use crate::indexer::{Category, Indexer, Query, SearchResult};
 
 pub struct Gathered {
     pub results: Vec<SearchResult>,
-    /// One entry per indexer that could not answer, with the error kept whole: a rejected key,
-    /// a spent quota and a dead connection call for different actions, and flattening them to a
-    /// string here forced the boundary to show one vague sentence for all three.
+    /// Per failed indexer, the error kept whole.
     pub problems: Vec<(String, crate::error::Error)>,
 }
 
 impl Gathered {
-    /// Nothing found and every indexer refused: that is a failure, not an empty result.
+    /// Every indexer refused and nothing was found.
     pub fn is_total_failure(&self) -> bool {
         self.results.is_empty() && !self.problems.is_empty()
     }
@@ -43,8 +37,6 @@ pub fn gather<'a>(
     Gathered { results, problems }
 }
 
-/// The same release listed by two indexers is one release. The copy kept is the one that looks
-/// better taken: grab counts differ per indexer, and the higher one is the better evidence.
 fn merge(results: &mut Vec<SearchResult>, release: SearchResult) {
     let key = identity(&release);
     match results
@@ -69,12 +61,7 @@ fn merge(results: &mut Vec<SearchResult>, release: SearchResult) {
     }
 }
 
-/// How much a found title looks like the thing she asked for.
-///
-/// A search for "game of thrones" answers with the seasons of Game of Thrones, but also with
-/// every parody, documentary and episode review that carries the words, and the indexer returns
-/// them in no useful order. What she asked for exactly comes first; things that contain her whole
-/// question come next, the less extra baggage the better; loose word matches trail.
+/// How much a title matches the question.
 pub fn relevance(query: &str, title: &str) -> f64 {
     let asked = words(query);
     let found = words(title);
@@ -95,12 +82,6 @@ pub fn relevance(query: &str, title: &str) -> f64 {
     }
 }
 
-/// The same word, allowing for the letter a language adds or drops.
-///
-/// "Gomorra" is what the show is called in Italian and "Gomorrah" is what its releases are named,
-/// and asking for one was scoring zero against the other: the five seasons on the indexer were
-/// thrown away for a spelling. A tail of one or two letters is a spelling of the same word; a
-/// longer one is a different word, and "star" must not go on matching "stargate".
 fn same_word(asked: &str, found: &str) -> bool {
     if asked == found {
         return true;
@@ -121,8 +102,7 @@ fn words(text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Diacritics flattened to ASCII. Releases are filed in scene ASCII, so "Cuéntame cómo pasó"
-/// has to become "Cuentame como paso" before it can match anything, whatever the language.
+/// Diacritics flattened to scene ASCII.
 pub fn fold(text: &str) -> String {
     text.chars()
         .map(|letter| match letter {
@@ -152,7 +132,6 @@ fn identity(release: &SearchResult) -> (String, u64) {
         .filter(|c| c.is_alphanumeric())
         .flat_map(char::to_lowercase)
         .collect();
-    // sizes differ by a few bytes between indexers for the same post
     (name, release.size_bytes / 1_048_576)
 }
 
@@ -287,8 +266,6 @@ mod tests {
         assert!(gathered.is_total_failure());
     }
 
-    // The real listing for "game of thrones": the seasons she wanted were buried under The Last
-    // Watch, an animated history, a parody and an episode review, in the indexer's own order.
     #[test]
     fn what_she_asked_for_exactly_outranks_everything_that_merely_contains_it() {
         let exact = relevance("game of thrones", "Game Of Thrones");
@@ -312,7 +289,6 @@ mod tests {
         assert_eq!(relevance("Cuéntame cómo pasó", "cuéntame cómo pasó"), 3.0);
     }
 
-    // Releases are filed in scene ASCII: her accents are right, and they matched nothing.
     #[test]
     fn accents_do_not_keep_her_words_from_matching_scene_names() {
         assert_eq!(relevance("Cuéntame cómo pasó", "Cuentame.Como.Paso"), 3.0);
@@ -322,8 +298,6 @@ mod tests {
         );
     }
 
-    // She typed the Italian name of the show and was shown two of its five seasons: the three the
-    // indexer files as "Gomorrah" scored zero against "Gomorra" and were thrown away.
     #[test]
     fn a_letter_a_language_adds_or_drops_is_the_same_word() {
         assert!(relevance("gomorra", "Gomorrah.S03.Bluray.1080p") > 0.0);
