@@ -1227,6 +1227,7 @@ function Settings({ state, actions }) {
         <button class="quiet" onClick=${actions.checkSettings}>${T.check}</button>
       </div>
       <${Notice} notice=${state.settingsNotice} />
+      <p class="path" id="app-version">Mamá Cine ${settings.version}</p>
       </div>
     </section>`;
 }

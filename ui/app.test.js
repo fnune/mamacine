@@ -35,7 +35,7 @@ const SETTINGS = {
   news_connections: 8, news_encrypted: true, subtitles_key: 'otra-clave',
   subtitles_agent: 'mamacine v1.0', subtitles_user: 'fnune', subtitles_password_set: true,
   destination: '/home/fausto/Descargas', language: 'any', tmdb_key: '',
-  ui_language: '', app_language: 'es',
+  ui_language: '', app_language: 'es', version: '0.2.0',
   autostart: false, keep_running: true,
   settings_path: '/home/fausto/.config/mamacine/settings.json',
   log_path: '/home/fausto/.local/share/mamacine/mamacine.log',
@@ -608,6 +608,15 @@ test('a new version is offered with one button, and an installed one just says s
   const done = installed.document.getElementById('update');
   assert.match(done.textContent, /ya está instalada/);
   assert.equal(installed.document.getElementById('install-update'), null, 'nothing left to press');
+});
+
+// The one place an update can be seen to have happened: Ajustes names the running version.
+test('the settings screen says which version is running', async () => {
+  const app = start();
+  await settle();
+  click(app, app.document.querySelector('[data-screen="settings"]'));
+  await settle();
+  assert.match(app.document.getElementById('app-version').textContent, /Mamá Cine 0\.2\.0/);
 });
 
 test('the interface speaks the language the settings resolve', async () => {

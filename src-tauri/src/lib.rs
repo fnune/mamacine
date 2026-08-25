@@ -348,10 +348,12 @@ pub struct SettingsView {
     ready: bool,
     settings_path: String,
     log_path: String,
+    version: String,
 }
 
 fn view_of(handle: &tauri::AppHandle, stored: &settings_file::StoredSettings) -> SettingsView {
     SettingsView {
+        version: handle.package_info().version.to_string(),
         settings_path: settings_file::path(handle)
             .map(|path| path.display().to_string())
             .unwrap_or_default(),

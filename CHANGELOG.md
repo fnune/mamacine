@@ -2,6 +2,10 @@
 
 What changed for the person using the app, newest entry first. Versions follow [semver](https://semver.org/); the shape follows [Keep a Changelog](https://keepachangelog.com/), loosely and in prose. A release's notes are its entry here.
 
+## v0.2.0 · 2026-08-25
+
+- Ajustes says which version of Mamá Cine is running, so an update has somewhere to be seen.
+
 ## v0.1.0 · 2026-08-25
 
 The first release.
