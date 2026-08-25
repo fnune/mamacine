@@ -3,6 +3,8 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+./scripts/fetch-sidecars.sh linux
+
 if [[ -z ${GDK_BACKEND:-} ]]; then
     if [[ ${XDG_SESSION_TYPE:-} == wayland ]]; then
         export GDK_BACKEND=wayland

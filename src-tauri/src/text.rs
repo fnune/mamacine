@@ -950,6 +950,22 @@ impl Lang {
         }
     }
 
+    pub fn in_the_menu_title(self) -> &'static str {
+        match self {
+            Lang::Es => "Mamá Cine ya está en el menú de aplicaciones",
+            Lang::En => "Mamá Cine is now in the applications menu",
+        }
+    }
+
+    pub fn in_the_menu_body(self) -> &'static str {
+        match self {
+            Lang::Es => {
+                "A partir de ahora se abre desde ahí. El archivo descargado ya no hace falta."
+            }
+            Lang::En => "From now on it opens from there. The downloaded file is no longer needed.",
+        }
+    }
+
     // --- the settings check --------------------------------------------------------
 
     pub fn check_no_indexer(self) -> &'static str {

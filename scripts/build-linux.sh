@@ -68,6 +68,10 @@ fi
 
 cargo install --locked tauri-cli --version "=2.11.4" || true
 
+# The programs the app drives travel with the AppImage: a double-clicked download has no PATH
+# worth speaking of.
+/src/scripts/fetch-sidecars.sh linux
+
 dist="/src/dist"
 mkdir -p "$dist"
 rm -f "$dist/MamaCine-x86_64.AppImage" "$dist/appdir-manifest.txt"

@@ -35,7 +35,7 @@ const SETTINGS = {
   news_connections: 8, news_encrypted: true, subtitles_key: 'otra-clave',
   subtitles_agent: 'mamacine v1.0', subtitles_user: 'fnune', subtitles_password_set: true,
   destination: '/home/fausto/Descargas', language: 'any', tmdb_key: '',
-  ui_language: '', app_language: 'es', version: '0.3.0',
+  ui_language: '', app_language: 'es', version: '0.4.0',
   autostart: false, keep_running: true,
   settings_path: '/home/fausto/.config/mamacine/settings.json',
   log_path: '/home/fausto/.local/share/mamacine/mamacine.log',
@@ -614,7 +614,7 @@ test('the settings screen says which version is running', async () => {
   await settle();
   click(app, app.document.querySelector('[data-screen="settings"]'));
   await settle();
-  assert.match(app.document.getElementById('app-version').textContent, /Mamá Cine 0\.3\.0/);
+  assert.match(app.document.getElementById('app-version').textContent, /Mamá Cine 0\.4\.0/);
 });
 
 // The interface speaks the language the backend resolved: Spanish by default, English when

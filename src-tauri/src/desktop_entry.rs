@@ -1,4 +1,63 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// Where the AppImage lives once adopted: a home no cleanup habit empties.
+pub fn stable_home(data_home: &Path) -> PathBuf {
+    data_home.join("mamacine").join("Mamá Cine.AppImage")
+}
+
+/// A download folder is a place things get deleted from, and the menu entry would die with the
+/// file. Launched from anywhere else, the AppImage copies itself into its stable home, and that
+/// copy is what the menu points at. The copy she launched wins: if it differs from the adopted
+/// one, it replaces it, and the updater sorts out versions within the day.
+///
+/// Answers with the stable path and whether anything was copied.
+pub fn adopt(appimage: &Path, data_home: &Path) -> std::io::Result<(PathBuf, bool)> {
+    let home = stable_home(data_home);
+    if appimage == home {
+        return Ok((home, false));
+    }
+    if same_bytes(appimage, &home) {
+        return Ok((home, false));
+    }
+    std::fs::create_dir_all(home.parent().expect("the home has a parent"))?;
+    let staged = home.with_extension("new");
+    std::fs::copy(appimage, &staged)?;
+    executable(&staged)?;
+    std::fs::rename(&staged, &home)?;
+    Ok((home, true))
+}
+
+fn same_bytes(one: &Path, other: &Path) -> bool {
+    let sizes = (
+        one.metadata().map(|data| data.len()),
+        other.metadata().map(|data| data.len()),
+    );
+    match sizes {
+        (Ok(here), Ok(there)) if here == there => {}
+        _ => return false,
+    }
+    match (std::fs::read(one), std::fs::read(other)) {
+        (Ok(here), Ok(there)) => digest(&here) == digest(&there),
+        _ => false,
+    }
+}
+
+fn digest(bytes: &[u8]) -> Vec<u8> {
+    ring::digest::digest(&ring::digest::SHA256, bytes)
+        .as_ref()
+        .to_vec()
+}
+
+#[cfg(unix)]
+fn executable(path: &Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))
+}
+
+#[cfg(not(unix))]
+fn executable(_path: &Path) -> std::io::Result<()> {
+    Ok(())
+}
 
 /// An AppImage is invisible to the desktop's menus until somebody says otherwise, and nobody
 /// less technical ever says otherwise. The AppImage carries the desktop entry Tauri wrote; this
@@ -171,6 +230,45 @@ mod tests {
             std::fs::read_to_string(data_home.join("applications/com.fnune.mamacine.desktop"))
                 .expect("the entry");
         assert!(entry.contains("Escritorio"), "{entry}");
+    }
+
+    // Downloads folders get emptied; the adopted copy is the one the menu can trust. The copy
+    // she launched wins, and an unchanged relaunch from the download copies nothing.
+    #[test]
+    fn a_launched_appimage_settles_into_a_home_no_cleanup_empties() {
+        let directory = scratch("mama-cine-adopt");
+        let downloaded = directory.join("Descargas/Mamá Cine.AppImage");
+        std::fs::create_dir_all(downloaded.parent().expect("a parent")).expect("folders");
+        std::fs::write(&downloaded, b"version one").expect("the download");
+        let data_home = directory.join("data");
+
+        let (home, adopted) = adopt(&downloaded, &data_home).expect("adopted");
+        assert!(adopted);
+        assert_eq!(home, stable_home(&data_home));
+        assert_eq!(std::fs::read(&home).expect("the copy"), b"version one");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&home)
+                .expect("metadata")
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o111, 0o111, "executable for everyone");
+        }
+
+        assert!(
+            !adopt(&downloaded, &data_home).expect("looked").1,
+            "an unchanged relaunch copies nothing"
+        );
+        assert!(
+            !adopt(&home, &data_home).expect("looked").1,
+            "launched from its home, there is nothing to do"
+        );
+
+        std::fs::write(&downloaded, b"version two").expect("a newer download");
+        let (_, readopted) = adopt(&downloaded, &data_home).expect("readopted");
+        assert!(readopted, "the copy she launched wins");
+        assert_eq!(std::fs::read(&home).expect("the copy"), b"version two");
     }
 
     #[test]

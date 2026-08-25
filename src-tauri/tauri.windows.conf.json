@@ -1,9 +1,0 @@
-{
-  "bundle": {
-    "externalBin": [
-      "binaries/nzbget",
-      "binaries/unrar",
-      "binaries/7za"
-    ]
-  }
-}

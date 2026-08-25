@@ -610,6 +610,7 @@ fn open_with_desktop(path: &str, lang: Lang) -> Result<(), String> {
         command.arg(path);
         command
     };
+    supervisor::without_the_appimage_surroundings(&mut command);
     let mut child = command.spawn().map_err(|failure| failure.to_string())?;
     if cfg!(target_os = "windows") {
         return Ok(());
@@ -996,10 +997,33 @@ pub fn run() {
                     });
                 if let Some(data_home) = data_home {
                     let entries = Arc::clone(&app);
+                    let entry_handle = handle.clone();
                     std::thread::spawn(move || {
-                        match desktop_entry::install(&appdir, &appimage, &data_home) {
-                            Ok(true) => entries.log.line("desktop entry installed"),
-                            Ok(false) => {}
+                        use tauri_plugin_notification::NotificationExt;
+                        let (home, adopted) = match desktop_entry::adopt(&appimage, &data_home) {
+                            Ok(outcome) => outcome,
+                            Err(failure) => {
+                                entries
+                                    .log
+                                    .line(&format!("the appimage could not settle in: {failure}"));
+                                (appimage.clone(), false)
+                            }
+                        };
+                        match desktop_entry::install(&appdir, &home, &data_home) {
+                            Ok(installed) => {
+                                if adopted || installed {
+                                    entries.log.line("desktop entry installed");
+                                }
+                                if adopted {
+                                    let lang = entries.lang();
+                                    let _ = entry_handle
+                                        .notification()
+                                        .builder()
+                                        .title(lang.in_the_menu_title())
+                                        .body(lang.in_the_menu_body())
+                                        .show();
+                                }
+                            }
                             Err(failure) => entries
                                 .log
                                 .line(&format!("desktop entry not installed: {failure}")),

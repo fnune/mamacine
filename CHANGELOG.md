@@ -2,6 +2,12 @@
 
 What changed for the person using the app, newest entry first. Versions follow [semver](https://semver.org/); the shape follows [Keep a Changelog](https://keepachangelog.com/), loosely and in prose. A release's notes are its entry here.
 
+## v0.4.0 · 2026-08-25
+
+- The AppImage settles in on first launch: it copies itself somewhere safe from download-folder cleanups, and the menu entry points at that copy. One notification says the downloaded file is no longer needed.
+- The Linux build now travels with its own downloader, the way the Windows one always did: a double-clicked AppImage works on a computer with nothing installed.
+- Opening the log, a folder or a film from the AppImage no longer fails: programs the app starts are freed of the AppImage's own surroundings first.
+
 ## v0.3.0 · 2026-08-25
 
 - On Linux, the AppImage puts itself in the desktop's menu on first launch: a proper entry with the app's own icon, kept pointing at wherever the file lives.

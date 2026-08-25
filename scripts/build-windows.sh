@@ -48,7 +48,7 @@ rustup target add "$target"
 cargo install --locked cargo-xwin --version "=0.22.0" || true
 cargo install --locked tauri-cli --version "=2.11.4" || true
 
-/src/scripts/fetch-sidecars.sh
+/src/scripts/fetch-sidecars.sh windows
 
 cargo tauri build \
     --runner cargo-xwin \

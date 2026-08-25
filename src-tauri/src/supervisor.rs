@@ -61,6 +61,7 @@ impl Nzbget {
         ));
 
         let mut command = Command::new(&program);
+        without_the_appimage_surroundings(&mut command);
         command
             .current_dir(&work)
             .arg("-c")
@@ -321,6 +322,27 @@ fn is_the_same_program(copy: &std::path::Path, source: &std::path::Path) -> bool
     }
 }
 
+/// A child of an AppImage inherits library paths into the mounted image, and a host program
+/// started with those dies at once: xdg-open answered "error 4" the day this was found. Every
+/// variable whose value points into the image is dropped for the child.
+pub fn without_the_appimage_surroundings(command: &mut Command) {
+    let Some(appdir) = std::env::var_os("APPDIR") else {
+        return;
+    };
+    scrubbed_of(command, &appdir.to_string_lossy());
+}
+
+fn scrubbed_of(command: &mut Command, appdir: &str) {
+    if appdir.trim().is_empty() {
+        return;
+    }
+    for (name, value) in std::env::vars() {
+        if value.contains(appdir) {
+            command.env_remove(&name);
+        }
+    }
+}
+
 fn free_port() -> Result<u16> {
     let listener = TcpListener::bind("127.0.0.1:0")?;
     Ok(listener.local_addr()?.port())
@@ -573,6 +595,30 @@ mod tests {
                 return;
             }
         }
+    }
+
+    #[test]
+    fn what_points_into_the_mounted_image_never_reaches_a_child() {
+        std::env::set_var(
+            "MAMACINE_TEST_POISONED",
+            "/tmp/.mount_mamacine_test/usr/lib",
+        );
+        std::env::set_var("MAMACINE_TEST_CLEAN", "/usr/lib");
+        let mut command = Command::new("true");
+        scrubbed_of(&mut command, "/tmp/.mount_mamacine_test");
+        let removed: Vec<String> = command
+            .get_envs()
+            .filter(|(_, value)| value.is_none())
+            .map(|(name, _)| name.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            removed.contains(&"MAMACINE_TEST_POISONED".to_string()),
+            "{removed:?}"
+        );
+        assert!(
+            !removed.contains(&"MAMACINE_TEST_CLEAN".to_string()),
+            "{removed:?}"
+        );
     }
 
     struct NoSubtitles;

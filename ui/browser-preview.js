@@ -125,7 +125,7 @@ window.__TAURI__ = {
                    key: 'una-clave', enabled: true }], news_port: 563, news_host: 'news.eweka.nl',
                    news_connections: 8, news_encrypted: true, subtitles_agent: 'mamacine v1.0',
                    language: 'any', destination: 'C:\\Películas', autostart: false,
-                   keep_running: true, ui_language: '', app_language: 'es', version: '0.3.0',
+                   keep_running: true, ui_language: '', app_language: 'es', version: '0.4.0',
                    settings_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\settings.json',
                    log_path: 'C:\\Users\\mama\\AppData\\Roaming\\mamacine\\mamacine.log' };
         case 'open_settings_file':
