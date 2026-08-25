@@ -7,6 +7,7 @@ mod orchestrator;
 mod settings_file;
 mod supervisor;
 mod text;
+mod updater;
 
 use finishing::Finisher;
 use library::Library;
@@ -27,6 +28,7 @@ use supervisor::Nzbget;
 use tauri::{Manager, State};
 use tauri_plugin_notification::NotificationExt;
 use text::Lang;
+use updater::Plan;
 
 struct Runtime {
     orchestrator: Arc<Orchestrator>,
@@ -47,6 +49,13 @@ pub struct App {
     log: Arc<Log>,
     network: Network,
     lang: RwLock<Lang>,
+    update: RwLock<Option<PendingUpdate>>,
+}
+
+/// A newer release: what the window is told, and what pressing the button should do.
+struct PendingUpdate {
+    news: updater::UpdateNews,
+    plan: Plan,
 }
 
 impl App {
@@ -161,7 +170,16 @@ async fn copies(app: State<'_, Arc<App>>, id: i64) -> Result<orchestrator::Copie
 async fn progress(app: State<'_, Arc<App>>) -> Result<Progress, String> {
     let app = app.inner().clone();
     off_thread(move || match app.orchestrator() {
-        Ok(orchestrator) => Ok(orchestrator.progress()),
+        Ok(orchestrator) => {
+            let mut progress = orchestrator.progress();
+            progress.update = app
+                .update
+                .read()
+                .expect("not poisoned")
+                .as_ref()
+                .map(|pending| pending.news.clone());
+            Ok(progress)
+        }
         Err(problem) => Ok(Progress {
             active: Vec::new(),
             finished: Vec::new(),
@@ -185,6 +203,12 @@ async fn progress(app: State<'_, Arc<App>>) -> Result<Progress, String> {
             total_space: String::new(),
             total_bytes: 0,
             problem: Some(problem),
+            update: app
+                .update
+                .read()
+                .expect("not poisoned")
+                .as_ref()
+                .map(|pending| pending.news.clone()),
         }),
     })
     .await
@@ -604,6 +628,136 @@ fn open_with_desktop(path: &str, lang: Lang) -> Result<(), String> {
     Ok(())
 }
 
+const UPDATE_REPO: &str = "fnune/mamacine";
+
+/// Once a day: what GitHub Releases has, and what to do about it. An AppImage takes the new
+/// copy by itself; anywhere else the window offers a button, and either way she is told once.
+fn check_for_update(handle: &tauri::AppHandle, app: &App, running: &str) {
+    use tauri_plugin_notification::NotificationExt;
+
+    let lang = app.lang();
+    let releases = mamacine_core::updates::GithubReleases::new(UPDATE_REPO, polite(1000));
+    let found = match releases.latest() {
+        Ok(Some(found)) => found,
+        Ok(None) => return,
+        Err(failure) => {
+            app.log.line(&format!("update check: {failure}"));
+            return;
+        }
+    };
+    let appimage = updater::running_appimage();
+    let Some(plan) = updater::plan(&found, running, appimage.as_deref(), cfg!(windows)) else {
+        return;
+    };
+    let already = app
+        .update
+        .read()
+        .expect("not poisoned")
+        .as_ref()
+        .map(|pending| pending.news.version.clone());
+    if already.as_deref() == Some(found.version.as_str()) {
+        return;
+    }
+
+    let notify = |title: String, body: &str| {
+        let _ = handle
+            .notification()
+            .builder()
+            .title(title)
+            .body(body)
+            .show();
+    };
+    match &plan {
+        Plan::Replace {
+            version,
+            appimage_url,
+            checksums_url,
+            destination,
+        } => {
+            let patient =
+                mamacine_core::updates::GithubReleases::new(UPDATE_REPO, Network::patient());
+            match updater::replace(
+                &patient,
+                appimage_url,
+                checksums_url.as_deref(),
+                destination,
+            ) {
+                Ok(()) => {
+                    app.log.line(&format!("updated in place to {version}"));
+                    *app.update.write().expect("not poisoned") = Some(PendingUpdate {
+                        news: updater::UpdateNews {
+                            version: version.clone(),
+                            installed: true,
+                        },
+                        plan: plan.clone(),
+                    });
+                    notify(
+                        lang.update_installed_title(version),
+                        lang.update_installed_body(),
+                    );
+                }
+                Err(failure) => app.log.line(&format!("update to {version}: {failure}")),
+            }
+        }
+        Plan::RunInstaller { version, .. } | Plan::Open { version, .. } => {
+            let version = version.clone();
+            *app.update.write().expect("not poisoned") = Some(PendingUpdate {
+                news: updater::UpdateNews {
+                    version: version.clone(),
+                    installed: false,
+                },
+                plan,
+            });
+            notify(
+                lang.update_available_title(&version),
+                lang.update_available_body(),
+            );
+        }
+    }
+}
+
+/// The button on the update banner: run the installer, or open the release page.
+#[tauri::command]
+async fn open_update(handle: tauri::AppHandle, app: State<'_, Arc<App>>) -> Result<(), String> {
+    let app = app.inner().clone();
+    off_thread(move || {
+        let plan = app
+            .update
+            .read()
+            .expect("not poisoned")
+            .as_ref()
+            .map(|pending| pending.plan.clone());
+        match plan {
+            Some(Plan::Open { url, .. }) => open_with_desktop(&url, app.lang()),
+            Some(Plan::RunInstaller {
+                installer_url,
+                checksums_url,
+                ..
+            }) => {
+                let into = handle
+                    .path()
+                    .app_data_dir()
+                    .map_err(|failure| failure.to_string())?;
+                let patient =
+                    mamacine_core::updates::GithubReleases::new(UPDATE_REPO, Network::patient());
+                let installer = updater::fetch_installer(
+                    &patient,
+                    &installer_url,
+                    checksums_url.as_deref(),
+                    &into,
+                )
+                .map_err(|failure| messages::explain(&failure, app.lang()).said)?;
+                std::process::Command::new(&installer)
+                    .spawn()
+                    .map_err(|failure| failure.to_string())?;
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    })
+    .await
+}
+
 fn build_tray(handle: &tauri::AppHandle) -> tauri::Result<tauri::menu::MenuItem<tauri::Wry>> {
     use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
     use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -856,6 +1010,7 @@ pub fn run() {
                 log,
                 network: Network::new(),
                 lang: RwLock::new(lang),
+                update: RwLock::new(None),
             });
 
             let building = Arc::clone(&app);
@@ -877,6 +1032,15 @@ pub fn run() {
                     }
                     std::thread::sleep(std::time::Duration::from_secs(5));
                 });
+            });
+
+            let updates = Arc::clone(&app);
+            let update_handle = handle.clone();
+            let running = tauri_app.package_info().version.to_string();
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(90));
+                check_for_update(&update_handle, &updates, &running);
+                std::thread::sleep(std::time::Duration::from_secs(24 * 3600 - 90));
             });
 
             handle.manage(Arc::clone(&app));
@@ -949,6 +1113,7 @@ pub fn run() {
             have,
             grab,
             progress,
+            open_update,
             try_more,
             cancel,
             play,

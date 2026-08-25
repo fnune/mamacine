@@ -45,7 +45,7 @@ function start({
   films = FILMS, seasons = SEASONS, finished = [], active = [], shelf = [],
   have = null, downloading = null, grabbed = { id: 7, already: false }, settings = SETTINGS,
   copies = { index: 0, series: false, versions: VERSIONS },
-  fail = null, holdSuggest = false,
+  fail = null, holdSuggest = false, update = null,
   versions = VERSIONS, suggestions = [], free_bytes = 442_000_000_000, free_space = '412 GB',
   problem = null, searchNotice = null, searchExact = null, synopsis = '', seasonEpisodes = [],
   episodeRows = [
@@ -79,7 +79,7 @@ function start({
       case 'copies': return copies;
       case 'grab': return grabbed;
       case 'progress':
-        return { ...live, total_space: '953 GB', total_bytes: 1_023_000_000_000 };
+        return { ...live, update, total_space: '953 GB', total_bytes: 1_023_000_000_000 };
       case 'synopsis': return synopsis;
       case 'library_synopsis': return synopsis;
       case 'read_settings': return settings;
@@ -592,6 +592,24 @@ test('a season nobody could identify still opens, without an episode list', asyn
 
 // The interface speaks the language the backend resolved: Spanish by default, English when
 // the setting or the computer says so. One switch drives every word on screen.
+// A new release is a quiet banner, not a modal: one line, one button. Once the AppImage has
+// replaced itself, the banner only says when the new version starts.
+test('a new version is offered with one button, and an installed one just says so', async () => {
+  const app = start({ update: { version: '0.2.0', installed: false } });
+  await settle();
+  const banner = app.document.getElementById('update');
+  assert.match(banner.textContent, /versión nueva de Mamá Cine \(0\.2\.0\)/);
+  click(app, app.document.getElementById('install-update'));
+  await settle();
+  assert.ok(app.calls.some((call) => call.command === 'open_update'), 'the button installs');
+
+  const installed = start({ update: { version: '0.2.0', installed: true } });
+  await settle();
+  const done = installed.document.getElementById('update');
+  assert.match(done.textContent, /ya está instalada/);
+  assert.equal(installed.document.getElementById('install-update'), null, 'nothing left to press');
+});
+
 test('the interface speaks the language the settings resolve', async () => {
   const app = start({ settings: { ...SETTINGS, app_language: 'en' } });
   await settle();

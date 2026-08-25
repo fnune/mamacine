@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+jobs:
+  wait-for-ci:
+    runs-on: ubuntu-latest
+    permissions:
+      checks: read
+    steps:
+      - name: Wait for the checks on this commit
+        run: |
+          for i in {1..90}; do
+            status=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs" \
+              --jq '.check_runs | if length == 0 then "pending" elif all(.conclusion == "success") then "success" elif any(.conclusion == "failure") then "failure" else "pending" end')
+            echo "checks: $status"
+            [ "$status" = "success" ] && exit 0
+            [ "$status" = "failure" ] && exit 1
+            sleep 10
+          done
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+  release:
+    needs: wait-for-ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make room for two container builds
+        run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
+
+      - name: Build the AppImage
+        run: ./scripts/build-linux.sh
+
+      - name: Build the Windows installer
+        run: ./scripts/build-windows.sh
+
+      - name: Publish the release with its changelog entry
+        run: |
+          awk -v tag="${{ github.ref_name }}" '
+            $0 ~ "^## " tag { keep = 1; next }
+            /^## / { keep = 0 }
+            keep' CHANGELOG.md > release-notes.md
+          gh release create "${{ github.ref_name }}" \
+            --title "${{ github.ref_name }}" \
+            --notes-file release-notes.md \
+            dist/MamaCine-x86_64.AppImage \
+            dist/MamaCine-x64-setup.exe \
+            dist/checksums.txt
+        env:
+          GH_TOKEN: ${{ github.token }}

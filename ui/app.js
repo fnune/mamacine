@@ -185,6 +185,11 @@ const STRINGS = {
     savedMissing: 'Guardado, pero todavía falta un buscador o el servidor de descargas.',
     findingSubtitles: 'Buscando subtítulos…',
     sentToBin: (title) => `He enviado ${title} a la papelera. Desde ahí todavía la puedes recuperar.`,
+    updateAvailable: (version) => `Hay una versión nueva de Mamá Cine (${version}).`,
+    installUpdate: 'Instalarla',
+    updating: 'Descargando…',
+    updateInstalled: (version) => `Mamá Cine ${version} ya está instalada. `
+      + 'Se estrenará la próxima vez que abras la aplicación.',
   },
   en: {
     statusWords: {
@@ -353,6 +358,11 @@ const STRINGS = {
     savedMissing: 'Saved, but an indexer or the download server is still missing.',
     findingSubtitles: 'Looking for subtitles…',
     sentToBin: (title) => `I sent ${title} to the recycle bin. It can still be recovered from there.`,
+    updateAvailable: (version) => `There is a new version of Mamá Cine (${version}).`,
+    installUpdate: 'Install it',
+    updating: 'Downloading…',
+    updateInstalled: (version) => `Mamá Cine ${version} is installed. `
+      + 'It starts the next time you open the app.',
   },
 };
 
@@ -1259,6 +1269,7 @@ function App() {
     confirmRemove: null,
     settings: null,
     lang: initialLang,
+    updating: false,
     progress: { active: [], finished: [], shelf: [], free_space: '', free_bytes: 0 },
   });
 
@@ -1731,6 +1742,17 @@ function App() {
       }
     },
 
+    installUpdate: async () => {
+      change({ updating: true });
+      try {
+        await invoke('open_update');
+      } catch (error) {
+        change({ notice: { text: String(error), bad: true } });
+      } finally {
+        change({ updating: false });
+      }
+    },
+
     openLogFolder: async () => {
       try {
         await invoke('open_log_folder');
@@ -1807,6 +1829,17 @@ function App() {
     </header>
     ${lowOnSpace(state.progress) && html`<div id="space" class="space">
       ${T.lowSpace(state.progress.free_space)}
+    </div>`}
+    ${state.progress.update && html`<div id="update" class="space">
+      ${state.progress.update.installed
+        ? T.updateInstalled(state.progress.update.version)
+        : html`<${Fragment}>
+            ${T.updateAvailable(state.progress.update.version)}
+            <button type="button" class="link" id="install-update" disabled=${state.updating}
+                    onClick=${actions.installUpdate}>
+              ${state.updating ? T.updating : T.installUpdate}
+            </button>
+          <//>`}
     </div>`}
     <${Problem} problem=${state.problem} actions=${actions} />
     <main>

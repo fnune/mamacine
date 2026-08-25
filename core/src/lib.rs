@@ -24,6 +24,7 @@ pub mod space;
 pub mod subtitles;
 pub mod tmdb;
 pub mod tvmaze;
+pub mod updates;
 pub mod yenc;
 
 pub use error::{Error, Result};

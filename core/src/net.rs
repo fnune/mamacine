@@ -19,6 +19,17 @@ impl Network {
     }
 }
 
+impl Network {
+    /// For one big download: a connection timeout, but no ceiling on how long the body takes.
+    pub fn patient() -> Self {
+        Network {
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(Duration::from_secs(15))
+                .build(),
+        }
+    }
+}
+
 impl Default for Network {
     fn default() -> Self {
         Network::new()

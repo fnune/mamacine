@@ -289,6 +289,8 @@ pub struct Progress {
     pub total_space: String,
     pub total_bytes: u64,
     pub problem: Option<String>,
+    /// Filled in at the boundary: the orchestrator has no opinion on versions.
+    pub update: Option<crate::updater::UpdateNews>,
 }
 
 pub struct TrayReport {
@@ -1372,6 +1374,7 @@ impl Orchestrator {
                     total_space: gigabytes(total_bytes),
                     total_bytes,
                     problem: Some(explained.said),
+                    update: None,
                 };
             }
         };
@@ -1390,6 +1393,7 @@ impl Orchestrator {
                     total_space: gigabytes(total_bytes),
                     total_bytes,
                     problem: Some(explained.said),
+                    update: None,
                 };
             }
         };
@@ -1523,6 +1527,7 @@ impl Orchestrator {
             total_space: gigabytes(total_bytes),
             total_bytes,
             problem: self.server_trouble.lock().expect("not poisoned").clone(),
+            update: None,
         }
     }
 

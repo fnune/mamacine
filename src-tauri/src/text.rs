@@ -920,6 +920,36 @@ impl Lang {
         }
     }
 
+    // --- updates ---------------------------------------------------------------------
+
+    pub fn update_available_title(self, version: &str) -> String {
+        match self {
+            Lang::Es => format!("Mamá Cine {version} ya está disponible"),
+            Lang::En => format!("Mamá Cine {version} is available"),
+        }
+    }
+
+    pub fn update_available_body(self) -> &'static str {
+        match self {
+            Lang::Es => "Abre Mamá Cine para instalarla.",
+            Lang::En => "Open Mamá Cine to install it.",
+        }
+    }
+
+    pub fn update_installed_title(self, version: &str) -> String {
+        match self {
+            Lang::Es => format!("Mamá Cine {version} ya está instalada"),
+            Lang::En => format!("Mamá Cine {version} is installed"),
+        }
+    }
+
+    pub fn update_installed_body(self) -> &'static str {
+        match self {
+            Lang::Es => "Se estrenará la próxima vez que abras la aplicación.",
+            Lang::En => "It starts the next time you open the app.",
+        }
+    }
+
     // --- the settings check --------------------------------------------------------
 
     pub fn check_no_indexer(self) -> &'static str {

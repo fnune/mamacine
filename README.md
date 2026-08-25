@@ -25,7 +25,7 @@ Accounts are entered once, on the settings screen, and stored under the user's o
 
 ## Platforms
 
-The app runs wherever [Tauri](https://tauri.app/) runs. Builds exist today for Windows (an NSIS installer, cross-compiled from Linux) and Linux (an AppImage); both are reproducible container builds. CI currently runs the checks; published releases are still to come.
+The app runs wherever [Tauri](https://tauri.app/) runs. Builds exist today for Windows (an NSIS installer, cross-compiled from Linux) and Linux (an AppImage); both are reproducible container builds. CI currently runs the checks; published releases are still to come. Installed copies look at GitHub Releases once a day: the AppImage replaces itself in place and starts new on the next launch, and on Windows the app fetches the installer, verifies it, and runs it when asked to.
 
 ## Contributing
 
