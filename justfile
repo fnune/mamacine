@@ -18,6 +18,7 @@ test:
     cargo test --workspace
 
 check:
+    ./scripts/fetch-sidecars.sh linux
     cargo fmt --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
