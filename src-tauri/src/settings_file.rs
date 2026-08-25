@@ -303,8 +303,11 @@ fn locale_of_this_computer() -> Option<String> {
 
 #[cfg(windows)]
 fn locale_of_this_computer() -> Option<String> {
-    use windows_sys::Win32::Globalization::{GetUserDefaultLocaleName, LOCALE_NAME_MAX_LENGTH};
-    let mut buffer = [0u16; LOCALE_NAME_MAX_LENGTH as usize];
+    use windows_sys::Win32::Globalization::GetUserDefaultLocaleName;
+    // the documented LOCALE_NAME_MAX_LENGTH, filed by windows-sys under a module nothing else
+    // here needs
+    const LOCALE_NAME_MAX_LENGTH: usize = 85;
+    let mut buffer = [0u16; LOCALE_NAME_MAX_LENGTH];
     let written = unsafe { GetUserDefaultLocaleName(buffer.as_mut_ptr(), buffer.len() as i32) };
     if written <= 1 {
         return None;
