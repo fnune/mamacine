@@ -456,6 +456,287 @@ mod tests {
         reclaim_orphan(&pidfile);
         assert!(!pidfile.exists());
     }
+
+    // --- the real thing ---------------------------------------------------------------
+    //
+    // A real nzbget, a real NNTP conversation, a real file on the disk: everything the app
+    // drives, end to end, with nothing leaving this machine. The news server is this test,
+    // listening on a local port.
+
+    use mamacine_core::nzbget::Downloader;
+    use mamacine_core::settings::{NewsServer, SubtitleSettings};
+    use std::collections::HashMap;
+    use std::io::BufReader;
+
+    fn crc32(data: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFFu32;
+        for byte in data {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 != 0 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+
+    fn yenc_article(name: &str, data: &[u8]) -> Vec<u8> {
+        let mut out = format!("=ybegin line=128 size={} name={name}\r\n", data.len()).into_bytes();
+        let mut column = 0;
+        for byte in data {
+            if column >= 128 {
+                out.extend(b"\r\n");
+                column = 0;
+            }
+            let coded = byte.wrapping_add(42);
+            if matches!(coded, 0 | b'\r' | b'\n' | b'=' | b'.') {
+                out.push(b'=');
+                out.push(coded.wrapping_add(64));
+                column += 2;
+            } else {
+                out.push(coded);
+                column += 1;
+            }
+        }
+        out.extend(
+            format!(
+                "\r\n=yend size={} crc32={:08x}\r\n",
+                data.len(),
+                crc32(data)
+            )
+            .into_bytes(),
+        );
+        out
+    }
+
+    fn serve_articles(articles: HashMap<String, Vec<u8>>) -> u16 {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("a local port");
+        let port = listener.local_addr().expect("an address").port();
+        let articles = Arc::new(articles);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let articles = Arc::clone(&articles);
+                std::thread::spawn(move || answer_nntp(stream, &articles));
+            }
+        });
+        port
+    }
+
+    fn answer_nntp(mut stream: std::net::TcpStream, articles: &HashMap<String, Vec<u8>>) {
+        let mut reader = BufReader::new(stream.try_clone().expect("a reader"));
+        if stream.write_all(b"200 mamacine test server\r\n").is_err() {
+            return;
+        }
+        let mut line = String::new();
+        loop {
+            line.clear();
+            if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                return;
+            }
+            let said = line.trim();
+            let (verb, rest) = said.split_once(' ').unwrap_or((said, ""));
+            let reply: Vec<u8> = match verb.to_uppercase().as_str() {
+                "AUTHINFO" if rest.to_uppercase().starts_with("USER") => {
+                    b"381 password please\r\n".to_vec()
+                }
+                "AUTHINFO" => b"281 welcome\r\n".to_vec(),
+                "DATE" => b"111 20260825120000\r\n".to_vec(),
+                "GROUP" => b"211 1 1 1 group\r\n".to_vec(),
+                "STAT" => b"223 0 <x>\r\n".to_vec(),
+                "ARTICLE" | "BODY" => {
+                    let id = rest.trim().trim_start_matches('<').trim_end_matches('>');
+                    match articles.get(id) {
+                        Some(body) => {
+                            let mut reply = if verb.eq_ignore_ascii_case("ARTICLE") {
+                                format!("220 0 <{id}>\r\nMessage-ID: <{id}>\r\n\r\n").into_bytes()
+                            } else {
+                                format!("222 0 <{id}>\r\n").into_bytes()
+                            };
+                            reply.extend_from_slice(body);
+                            reply.extend_from_slice(b".\r\n");
+                            reply
+                        }
+                        None => b"430 no such article\r\n".to_vec(),
+                    }
+                }
+                "QUIT" => {
+                    let _ = stream.write_all(b"205 bye\r\n");
+                    return;
+                }
+                _ => b"500 what?\r\n".to_vec(),
+            };
+            if stream.write_all(&reply).is_err() {
+                return;
+            }
+        }
+    }
+
+    struct NoSubtitles;
+
+    impl mamacine_core::opensubtitles::SubtitleSource for NoSubtitles {
+        fn find(
+            &self,
+            _: &mamacine_core::opensubtitles::SubtitleQuery,
+        ) -> mamacine_core::error::Result<Vec<mamacine_core::subtitles::Candidate>> {
+            Ok(Vec::new())
+        }
+        fn download(&self, _: i64) -> mamacine_core::error::Result<Vec<u8>> {
+            Ok(Vec::new())
+        }
+        fn downloads_remaining(&self) -> Option<i64> {
+            None
+        }
+    }
+
+    struct KeepEverything;
+
+    impl crate::orchestrator::Remover for KeepEverything {
+        fn remove(&self, _: &std::path::Path) -> std::result::Result<(), String> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_real_nzbget_downloads_a_real_post_without_leaving_this_machine() {
+        if std::process::Command::new("nzbget")
+            .arg("-v")
+            .output()
+            .is_err()
+        {
+            eprintln!("skipping: no nzbget on the PATH; the dev shell and CI both carry one");
+            return;
+        }
+
+        let directory = std::env::temp_dir().join("mama-cine-real-nzbget");
+        let _ = std::fs::remove_dir_all(&directory);
+        let films = directory.join("films");
+        let state = directory.join("state");
+        std::fs::create_dir_all(&films).expect("a films folder");
+        std::fs::create_dir_all(&state).expect("a state folder");
+
+        let film: Vec<u8> = (0..96_000u32).map(|i| (i % 251) as u8).collect();
+        let mut articles = HashMap::new();
+        articles.insert(
+            "una.pelicula.1@test".to_string(),
+            yenc_article("Una.Pelicula.2020.mkv", &film),
+        );
+        let nntp_port = serve_articles(articles);
+
+        let settings = Settings {
+            indexers: Vec::new(),
+            news: NewsServer {
+                host: "127.0.0.1".into(),
+                port: nntp_port,
+                username: "reader".into(),
+                password: "secret".into(),
+                encrypted: false,
+                connections: 2,
+                retention_days: 0,
+            },
+            subtitles: SubtitleSettings {
+                api_key: String::new(),
+                user_agent: "mamacine test".into(),
+                username: String::new(),
+                password: String::new(),
+                language: "es".into(),
+                api_base: None,
+            },
+            destination: films,
+            state,
+        };
+        let tools = Tools {
+            nzbget: "nzbget".into(),
+            unrar: "unrar".into(),
+            sevenzip: "7za".into(),
+        };
+        let log = Arc::new(Log::open(&directory));
+        let network = mamacine_core::net::Network::new();
+        let mut nzbget = Nzbget::start(&settings, &tools, &network, &log, crate::text::Lang::Es)
+            .expect("a real nzbget starts");
+
+        let rpc = NzbgetRpc::new(
+            nzbget.port,
+            &nzbget.password,
+            mamacine_core::net::Network::new(),
+        );
+        let nzb = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <nzb xmlns=\"http://www.newzbin.com/DTD/2003/nzb\">\n\
+             <file poster=\"test@test\" date=\"1700000000\" \
+             subject=\"&quot;Una.Pelicula.2020.mkv&quot; yEnc (1/1)\">\n\
+             <groups><group>alt.binaries.test</group></groups>\n\
+             <segments><segment bytes=\"{}\" number=\"1\">una.pelicula.1@test</segment></segments>\n\
+             </file>\n\
+             </nzb>\n",
+            film.len()
+        );
+        let id = rpc
+            .append("Una pelicula", nzb.as_bytes())
+            .expect("appended");
+
+        let deadline = Instant::now() + Duration::from_secs(90);
+        let landed = loop {
+            let finished = rpc
+                .history()
+                .unwrap_or_default()
+                .into_iter()
+                .find(|item| item.id == id);
+            if let Some(item) = finished {
+                if item.succeeded {
+                    break item;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "nzbget gave up on the post: {}",
+                    item.status
+                );
+            }
+            assert!(
+                Instant::now() < deadline,
+                "nzbget never finished; its log is beside {}",
+                directory.display()
+            );
+            std::thread::sleep(Duration::from_millis(300));
+        };
+
+        let folder = std::path::PathBuf::from(landed.directory.clone().expect("a directory"));
+        let video = crate::finishing::largest_video(&folder).expect("the film on the disk");
+        assert_eq!(
+            std::fs::read(&video).expect("the downloaded bytes"),
+            film,
+            "byte for byte what was posted"
+        );
+
+        let library = Arc::new(crate::library::Library::open(
+            &directory,
+            Arc::clone(&log),
+            crate::text::Lang::Es,
+        ));
+        let finisher = crate::finishing::Finisher {
+            downloader: Box::new(NzbgetRpc::new(
+                nzbget.port,
+                &nzbget.password,
+                mamacine_core::net::Network::new(),
+            )),
+            subtitles: Arc::new(NoSubtitles),
+            library: Arc::clone(&library),
+            log: Arc::clone(&log),
+            language: "es".into(),
+            lang: crate::text::Lang::Es,
+            remover: Arc::new(KeepEverything),
+            notify: Box::new(|_, _| {}),
+        };
+        finisher.sweep();
+        let entry = library.get(id).expect("a record of the film");
+        assert!(entry.settled, "the finisher settled what nzbget landed");
+        assert_eq!(entry.file.as_deref(), Some(video.as_path()));
+
+        nzbget.stop(&network);
+    }
 }
 
 #[cfg(not(unix))]

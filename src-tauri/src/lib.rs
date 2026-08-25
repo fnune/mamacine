@@ -49,13 +49,7 @@ pub struct App {
     log: Arc<Log>,
     network: Network,
     lang: RwLock<Lang>,
-    update: RwLock<Option<PendingUpdate>>,
-}
-
-/// A newer release: what the window is told, and what pressing the button should do.
-struct PendingUpdate {
-    news: updater::UpdateNews,
-    plan: Plan,
+    update: RwLock<Option<updater::Pending>>,
 }
 
 impl App {
@@ -636,84 +630,37 @@ fn check_for_update(handle: &tauri::AppHandle, app: &App, running: &str) {
     use tauri_plugin_notification::NotificationExt;
 
     let lang = app.lang();
-    let releases = mamacine_core::updates::GithubReleases::new(UPDATE_REPO, polite(1000));
-    let found = match releases.latest() {
-        Ok(Some(found)) => found,
-        Ok(None) => return,
-        Err(failure) => {
-            app.log.line(&format!("update check: {failure}"));
-            return;
-        }
-    };
+    let api = mamacine_core::updates::GithubReleases::new(UPDATE_REPO, polite(1000));
+    let downloads = mamacine_core::updates::GithubReleases::new(UPDATE_REPO, Network::patient());
     let appimage = updater::running_appimage();
-    let Some(plan) = updater::plan(&found, running, appimage.as_deref(), cfg!(windows)) else {
+    let Some(announcement) = updater::check(
+        &api,
+        &downloads,
+        running,
+        appimage.as_deref(),
+        cfg!(windows),
+        &app.update,
+        &app.log,
+    ) else {
         return;
     };
-    let already = app
-        .update
-        .read()
-        .expect("not poisoned")
-        .as_ref()
-        .map(|pending| pending.news.version.clone());
-    if already.as_deref() == Some(found.version.as_str()) {
-        return;
-    }
-
-    let notify = |title: String, body: &str| {
-        let _ = handle
-            .notification()
-            .builder()
-            .title(title)
-            .body(body)
-            .show();
+    let (title, body) = if announcement.installed {
+        (
+            lang.update_installed_title(&announcement.version),
+            lang.update_installed_body(),
+        )
+    } else {
+        (
+            lang.update_available_title(&announcement.version),
+            lang.update_available_body(),
+        )
     };
-    match &plan {
-        Plan::Replace {
-            version,
-            appimage_url,
-            checksums_url,
-            destination,
-        } => {
-            let patient =
-                mamacine_core::updates::GithubReleases::new(UPDATE_REPO, Network::patient());
-            match updater::replace(
-                &patient,
-                appimage_url,
-                checksums_url.as_deref(),
-                destination,
-            ) {
-                Ok(()) => {
-                    app.log.line(&format!("updated in place to {version}"));
-                    *app.update.write().expect("not poisoned") = Some(PendingUpdate {
-                        news: updater::UpdateNews {
-                            version: version.clone(),
-                            installed: true,
-                        },
-                        plan: plan.clone(),
-                    });
-                    notify(
-                        lang.update_installed_title(version),
-                        lang.update_installed_body(),
-                    );
-                }
-                Err(failure) => app.log.line(&format!("update to {version}: {failure}")),
-            }
-        }
-        Plan::RunInstaller { version, .. } | Plan::Open { version, .. } => {
-            let version = version.clone();
-            *app.update.write().expect("not poisoned") = Some(PendingUpdate {
-                news: updater::UpdateNews {
-                    version: version.clone(),
-                    installed: false,
-                },
-                plan,
-            });
-            notify(
-                lang.update_available_title(&version),
-                lang.update_available_body(),
-            );
-        }
-    }
+    let _ = handle
+        .notification()
+        .builder()
+        .title(title)
+        .body(body)
+        .show();
 }
 
 /// The button on the update banner: run the installer, or open the release page.
