@@ -2,6 +2,10 @@
 
 What changed for the person using the app, newest entry first. Versions follow [semver](https://semver.org/); the shape follows [Keep a Changelog](https://keepachangelog.com/), loosely and in prose. A release's notes are its entry here.
 
+## v0.3.0 · 2026-08-25
+
+- On Linux, the AppImage puts itself in the desktop's menu on first launch: a proper entry with the app's own icon, kept pointing at wherever the file lives.
+
 ## v0.2.0 · 2026-08-25
 
 The first release.

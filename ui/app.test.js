@@ -35,7 +35,7 @@ const SETTINGS = {
   news_connections: 8, news_encrypted: true, subtitles_key: 'otra-clave',
   subtitles_agent: 'mamacine v1.0', subtitles_user: 'fnune', subtitles_password_set: true,
   destination: '/home/fausto/Descargas', language: 'any', tmdb_key: '',
-  ui_language: '', app_language: 'es', version: '0.2.0',
+  ui_language: '', app_language: 'es', version: '0.3.0',
   autostart: false, keep_running: true,
   settings_path: '/home/fausto/.config/mamacine/settings.json',
   log_path: '/home/fausto/.local/share/mamacine/mamacine.log',
@@ -590,20 +590,18 @@ test('a season nobody could identify still opens, without an episode list', asyn
   assert.doesNotMatch(detail.textContent, /IMDb/);
 });
 
-// The interface speaks the language the backend resolved: Spanish by default, English when
-// the setting or the computer says so. One switch drives every word on screen.
 // A new release is a quiet banner, not a modal: one line, one button. Once the AppImage has
 // replaced itself, the banner only says when the new version starts.
 test('a new version is offered with one button, and an installed one just says so', async () => {
-  const app = start({ update: { version: '0.2.0', installed: false } });
+  const app = start({ update: { version: '0.3.0', installed: false } });
   await settle();
   const banner = app.document.getElementById('update');
-  assert.match(banner.textContent, /versión nueva de Mamá Cine \(0\.2\.0\)/);
+  assert.match(banner.textContent, /versión nueva de Mamá Cine \(0\.3\.0\)/);
   click(app, app.document.getElementById('install-update'));
   await settle();
   assert.ok(app.calls.some((call) => call.command === 'open_update'), 'the button installs');
 
-  const installed = start({ update: { version: '0.2.0', installed: true } });
+  const installed = start({ update: { version: '0.3.0', installed: true } });
   await settle();
   const done = installed.document.getElementById('update');
   assert.match(done.textContent, /ya está instalada/);
@@ -616,9 +614,11 @@ test('the settings screen says which version is running', async () => {
   await settle();
   click(app, app.document.querySelector('[data-screen="settings"]'));
   await settle();
-  assert.match(app.document.getElementById('app-version').textContent, /Mamá Cine 0\.2\.0/);
+  assert.match(app.document.getElementById('app-version').textContent, /Mamá Cine 0\.3\.0/);
 });
 
+// The interface speaks the language the backend resolved: Spanish by default, English when
+// the setting or the computer says so. One switch drives every word on screen.
 test('the interface speaks the language the settings resolve', async () => {
   const app = start({ settings: { ...SETTINGS, app_language: 'en' } });
   await settle();

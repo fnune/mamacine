@@ -1,3 +1,4 @@
+mod desktop_entry;
 mod disk;
 mod finishing;
 mod library;
@@ -982,6 +983,30 @@ pub fn run() {
                     std::thread::sleep(std::time::Duration::from_secs(5));
                 });
             });
+
+            if let (Some(appimage), Some(appdir)) = (
+                updater::running_appimage(),
+                std::env::var_os("APPDIR").map(std::path::PathBuf::from),
+            ) {
+                let data_home = std::env::var_os("XDG_DATA_HOME")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("HOME")
+                            .map(|home| std::path::PathBuf::from(home).join(".local/share"))
+                    });
+                if let Some(data_home) = data_home {
+                    let entries = Arc::clone(&app);
+                    std::thread::spawn(move || {
+                        match desktop_entry::install(&appdir, &appimage, &data_home) {
+                            Ok(true) => entries.log.line("desktop entry installed"),
+                            Ok(false) => {}
+                            Err(failure) => entries
+                                .log
+                                .line(&format!("desktop entry not installed: {failure}")),
+                        }
+                    });
+                }
+            }
 
             let updates = Arc::clone(&app);
             let update_handle = handle.clone();

@@ -35,11 +35,21 @@ jobs:
       - name: Make room for two container builds
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
 
+      - name: Cache what the container builds fetch and compile
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/mama-cine
+          key: release-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'scripts/build-linux.sh', 'scripts/build-windows.sh') }}
+          restore-keys: release-${{ runner.os }}-
+
       - name: Build the AppImage
         run: ./scripts/build-linux.sh
 
       - name: Build the Windows installer
         run: ./scripts/build-windows.sh
+
+      - name: Hand the caches back to the runner's own user
+        run: sudo chown -R "$USER" ~/.cache/mama-cine
 
       - name: Publish the release with its changelog entry
         run: |
