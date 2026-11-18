@@ -1,0 +1,5 @@
+description = "Mamá Cine: Rust and a Tauri app, with tools from the flake"
+modules = ["vcs-readwrite", "docs", "nix", "node"]
+
+[egress]
+allow = ["crates.io", "index.crates.io", "static.crates.io"]
