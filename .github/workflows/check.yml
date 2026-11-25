@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: fnune/ci@2169fa61d1af74311533f54e6356cf41ea7b3b84
+      - uses: fnune/ci@efd9d3202653a8ff8e41995ad8225c9f77a19a98
         with:
           cache-paths: |
             .cargo/registry

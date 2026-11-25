@@ -4,6 +4,9 @@ on:
   push:
     tags: ["v*"]
 
+permissions:
+  contents: read
+
 jobs:
   wait-for-ci:
     runs-on: ubuntu-26.04
@@ -12,7 +15,7 @@ jobs:
     steps:
       - name: Wait for the checks on this commit
         run: |
-          for i in {1..90}; do
+          for _ in {1..90}; do
             status=$(gh api "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs" \
               --jq '.check_runs | map(select(.name != "wait-for-ci" and .name != "release")) | if length == 0 then "pending" elif all(.conclusion == "success") then "success" elif any(.conclusion == "failure") then "failure" else "pending" end')
             echo "checks: $status"
@@ -23,6 +26,7 @@ jobs:
           exit 1
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
 
   release:
     needs: wait-for-ci
@@ -30,13 +34,15 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Make room for two container builds
         run: sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc
 
       - name: Cache what the container builds fetch and compile
-        uses: actions/cache@v4
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0 # zizmor: ignore[cache-poisoning]
         with:
           path: ~/.cache/mama-cine
           key: release-${{ runner.os }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml', 'scripts/build-linux.sh', 'scripts/build-windows.sh') }}
@@ -53,15 +59,16 @@ jobs:
 
       - name: Publish the release with its changelog entry
         run: |
-          awk -v tag="${{ github.ref_name }}" '
+          awk -v tag="$TAG" '
             $0 ~ "^## " tag { keep = 1; next }
             /^## / { keep = 0 }
             keep' CHANGELOG.md > release-notes.md
-          gh release create "${{ github.ref_name }}" \
-            --title "${{ github.ref_name }}" \
+          gh release create "$TAG" \
+            --title "$TAG" \
             --notes-file release-notes.md \
             dist/MamaCine-x86_64.AppImage \
             dist/MamaCine-x64-setup.exe \
             dist/checksums.txt
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
